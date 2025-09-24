@@ -1,34 +1,35 @@
-# ~ 5 mins
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import time
 from firedrake import *
-
-from Blob2D_diagnostics import *
 
 # ======================
 # PARAMETERS
 # ======================
 
-# Disable OpenMP threading for better performance with MPI
-os.environ["OMP_NUM_THREADS"] = "1"
+# Parameters
+g = 1.0  # curvature parameter (g = 2 * rho_s0 / R_c)
+alpha = 0.1  # parallel loss parameter (alpha = rho_s0 / L_parallel)
 
-# Physical parameters (Non-dimensional)
-g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c) # Constant(20.0 / 9.0)
-alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
+# BCs
+BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
 
-# Boundary conditions
-# BOUNDARY_TYPE = "dirichlet"
-BOUNDARY_TYPE = "periodic"
-
-# Initial condition
+# ICs
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 
-# Simulation setup
+# Simulation
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 128
 END_TIME = 10.0
 TIME_STEPS = 10000
+
+# CFL is DT ≤ C * (DX / V_max)
+# * C = Courant number. For DG(p), C ≤ 1/(2p+1)
+# * DX = DOMAIN_SIZE / MESH_RESOLUTION
+# * V_max = max ExB drift velocity ≈ sqrt(g * BLOB_AMPLITUDE * BLOB_WIDTH)
+# For p = 1 (C = 1/3), DX = 1.0 / 128 (≈ 0.008), V_max = sqrt(1 * 0.5 * 0.1) ≈ 0.3: DT ≤ 0.009
 DT = END_TIME / TIME_STEPS
 
 # Printing
@@ -47,7 +48,7 @@ else:
 x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
-# Function Spaces (DG for advected fields, CG for potential)
+# Function Spaces
 V_w = FunctionSpace(mesh, "DQ", 1)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_phi = FunctionSpace(mesh, "CG", 1)
@@ -70,13 +71,11 @@ v_phi = TestFunction(V_phi)
 # INITIAL CONDITIONS
 # ======================
 
-# Zero initial vorticity
 w.interpolate(0.0)
 w_old.assign(w)
 
-# Initial Gaussian blob density profile
-x_centre = y_centre = DOMAIN_SIZE / 2.0
-n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_centre)**2 + (y - y_centre)**2) / (BLOB_WIDTH**2))
+x_c = y_c = DOMAIN_SIZE / 2.0
+n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
 n.interpolate(n0)
 n_old.assign(n)
 
@@ -84,12 +83,10 @@ n_old.assign(n)
 # BOUNDARY CONDITIONS
 # ======================
 
-# Set boundary conditions
 if BOUNDARY_TYPE == "dirichlet":
-    # Zero potential on all boundaries (sheath-connected walls)
+    # sheath-connected walls
     bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
 else:
-    # No boundary conditions for periodic case
     bcs = []
 
 # ======================
@@ -137,15 +134,15 @@ F_n = (
 if BOUNDARY_TYPE == "dirichlet":
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     phi_solver = NonlinearVariationalSolver(phi_problem, solver_parameters={
+        'snes_type': 'ksponly',
         'ksp_type': 'cg',
-        'pc_type': 'hypre',
-        'pc_hypre_type': 'boomeramg',
         'ksp_rtol': 1e-10,
         'ksp_atol': 1e-12,
-        'snes_type': 'ksponly',
+        'pc_type': 'hypre',
+        'pc_hypre_type': 'boomeramg',
     })
 else:
-    nullspace = VectorSpaceBasis(constant=True)
+    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
 
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     phi_solver = NonlinearVariationalSolver(phi_problem, 
@@ -153,13 +150,12 @@ else:
         transpose_nullspace=nullspace,
         near_nullspace=nullspace,
         solver_parameters={
+            'snes_type': 'ksponly',
             'ksp_type': 'cg',
-            'pc_type': 'jacobi',
             'ksp_rtol': 1e-10,
             'ksp_atol': 1e-12,
-            'ksp_max_it': 2000,
-            'snes_type': 'ksponly',
             'ksp_initial_guess_nonzero': True,
+            'pc_type': 'gamg',
         }
     )
 
@@ -190,9 +186,6 @@ start_time = time.time()
 
 print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 
-# Track key values for diagnostics
-n_max_history = []
-
 # Save initial condition
 t = 0.0
 output_file.write(w, n, phi, time=t)
@@ -209,11 +202,6 @@ for step in range(TIME_STEPS):
     
     # Step 3: Update density using old values and new potential
     n_solver.solve()  # Does reassembly automatically
-    
-    # Check for NaNs
-    if not check_for_nan(w, n, phi, step+1, t):
-        print(f"Simulation stopped. Last good step: {step}")
-        break
 
     # Update old values for next time step
     w_old.assign(w)
@@ -221,17 +209,7 @@ for step in range(TIME_STEPS):
     
     # Save output every OUTPUT_INTERVAL steps
     if (step+1) % OUTPUT_INTERVAL == 0:
-        # Compute diagnostics
-        n_min, n_max, w_max, phi_max = compute_field_stats(w, n, phi)
-        
-        # Track density maximum
-        n_max_history.append(n_max)
-        
-        # Detect rapid growth
-        check_rapid_growth(n_max_history, n_max, step+1)
-        
         print(f"Saving output at t = {t}")
-        print(f"  n: [{n_min}, {n_max}], |w|_max = {w_max}, |phi|_max = {phi_max}")
         output_file.write(w, n, phi, time=t)
         
     # Progress output

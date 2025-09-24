@@ -1,30 +1,26 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import time
 from firedrake import *
 from irksome import Dt, TimeStepper, GaussLegendre
-
-from Blob2D_diagnostics import *
 
 # ======================
 # PARAMETERS
 # ======================
 
-# Disable OpenMP threading for better performance with MPI
-os.environ["OMP_NUM_THREADS"] = "1"
+# Parameters
+g = 1.0  # curvature parameter (g = 2 * rho_s0 / R_c)
+alpha = 0.1  # parallel loss parameter (alpha = rho_s0 / L_parallel)
 
-# Physical parameters (Non-dimensional)
-g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c) # Constant(20.0 / 9.0)
-alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
+# BCs
+BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
 
-# Boundary conditions
-# BOUNDARY_TYPE = "dirichlet"
-BOUNDARY_TYPE = "periodic"
-
-# Initial condition
+# ICs
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 
-# Simulation setup
+# Simulation
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 128
 END_TIME = 10.0
@@ -46,12 +42,10 @@ else:
 x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
-# Function Spaces (DG for advected fields, CG for potential)
+# Function Spaces
 V_w = FunctionSpace(mesh, "DQ", 1)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_phi = FunctionSpace(mesh, "CG", 1)
-
-# Mixed function space for coupled system
 V = V_w * V_n * V_phi
 
 # Fields
@@ -70,24 +64,20 @@ v_w, v_n, v_phi = TestFunctions(V)
 # INITIAL CONDITIONS
 # ======================
 
-# Zero initial vorticity
 w.interpolate(0.0)
 
-# Initial Gaussian blob density profile
-x_centre = y_centre = DOMAIN_SIZE / 2.0
-n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_centre)**2 + (y - y_centre)**2) / (BLOB_WIDTH**2))
+x_c = y_c = DOMAIN_SIZE / 2.0
+n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
 n.interpolate(n0)
 
 # ======================
 # BOUNDARY CONDITIONS
 # ======================
 
-# Set boundary conditions
 if BOUNDARY_TYPE == "dirichlet":
-    # Zero potential on all boundaries (sheath-connected walls)
-    bcs = [DirichletBC(V.sub(2), 0, 'on_boundary')]
+    # sheath-connected walls
+    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
 else:
-    # No boundary conditions for periodic case
     bcs = []
 
 # ======================
@@ -192,9 +182,6 @@ start_time = time.time()
 
 print(f"Running with dt = {float(dt)}, {BOUNDARY_TYPE} BCs")
 
-# Track key values for diagnostics
-n_max_history = []
-
 # Save initial condition
 w, n, phi = solution.subfunctions
 output_file.write(w, n, phi, time=float(t))
@@ -206,24 +193,9 @@ while step_counter < TIME_STEPS:
     stepper.advance()
     t.assign(float(t) + float(dt))
     
-    # Check for NaNs
-    if not check_for_nan(w, n, phi, step_counter, float(t)):
-        print(f"Simulation stopped. Last good step: {step_counter-1}")
-        break
-    
     # Save output every OUTPUT_INTERVAL steps
     if step_counter % OUTPUT_INTERVAL == 0:
-        # Compute diagnostics
-        n_min, n_max, w_max, phi_max = compute_field_stats(w, n, phi)
-        
-        # Track density maximum
-        n_max_history.append(n_max)
-        
-        # Detect rapid growth
-        check_rapid_growth(n_max_history, n_max, step_counter)
-        
         print(f"Saving output at t = {float(t)}")
-        print(f"  n: [{n_min}, {n_max}], |w|_max = {w_max}, |phi|_max = {phi_max}")
         w, n, phi = solution.subfunctions
         output_file.write(w, n, phi, time=float(t))
         

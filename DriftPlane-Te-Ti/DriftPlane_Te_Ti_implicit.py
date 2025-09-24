@@ -1,4 +1,6 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import time
 from firedrake import *
 from irksome import Dt, TimeStepper, GaussLegendre
@@ -7,16 +9,12 @@ from irksome import Dt, TimeStepper, GaussLegendre
 # PARAMETERS
 # ======================
 
-# Disable OpenMP threading for better performance with MPI
-os.environ["OMP_NUM_THREADS"] = "1"
-
-# Physical parameters (Non-dimensional)
-g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c) # Constant(20.0 / 9.0)
-alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
-delta_e = 6.5  # Sheath heat transmission coefficient for electrons
-delta_i = 2.0  # Ion thermal losses are included
-m_i_norm = 1.0  # Normalised ion mass
-m_e_norm = 1.0 / 1836.0  # Normalised electron mass
+# Parameters
+g = 1.0  # curvature parameter (g = 2 * rho_s0 / R_c)
+alpha = 0.1  # parallel loss parameter (alpha = rho_s0 / L_parallel)
+delta_e = 6.5  # sheath heat transmission coefficient for electrons
+delta_i = 2.0  # sheath heat transmission coefficient for ions
+m_i_norm = 1.0  # normalised ion mass
 
 # Sources
 SOURCE_AMP_n = 0.01
@@ -25,17 +23,16 @@ SOURCE_AMP_p_i = 0.01
 SOURCE_WIDTH = 0.05
 SOURCE_POS = 0.25
 
-# Boundary conditions
-# BOUNDARY_TYPE = "dirichlet"
-BOUNDARY_TYPE = "periodic"
+# BCs
+BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
 
-# Initial condition
+# ICs
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
-INITIAL_Te = 1.0  # Uniform initial electron temperature
-INITIAL_Ti = 0.1  # Uniform initial ion temperature
+INITIAL_Te = 1.0
+INITIAL_Ti = 0.1
 
-# Simulation setup
+# Simulation
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 128
 END_TIME = 10.0
@@ -57,14 +54,12 @@ else:
 x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
-# Function Spaces (DG for advected fields, CG for potential)
+# Function Spaces
 V_w = FunctionSpace(mesh, "DQ", 1)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_p_e = FunctionSpace(mesh, "DQ", 1)
 V_p_i = FunctionSpace(mesh, "DQ", 1)
 V_phi = FunctionSpace(mesh, "CG", 1)
-
-# Mixed function space for coupled system
 V = V_w * V_n * V_p_e * V_p_i * V_phi
 
 # Fields
@@ -85,12 +80,10 @@ v_w, v_n, v_p_e, v_p_i, v_phi = TestFunctions(V)
 # INITIAL CONDITIONS
 # ======================
 
-# Zero initial vorticity
 w.interpolate(0.0)
 
-# Initial Gaussian blob density profile
-x_centre = y_centre = DOMAIN_SIZE / 2.0
-n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_centre)**2 + (y - y_centre)**2) / (BLOB_WIDTH**2))
+x_c = y_c = DOMAIN_SIZE / 2.0
+n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
 n.interpolate(n0)
 
 p_e.interpolate(n0 * INITIAL_Te)
@@ -100,12 +93,10 @@ p_i.interpolate(n0 * INITIAL_Ti)
 # BOUNDARY CONDITIONS
 # ======================
 
-# Set boundary conditions
 if BOUNDARY_TYPE == "dirichlet":
-    # Zero potential on all boundaries (sheath-connected walls)
-    bcs = [DirichletBC(V.sub(4), 0, 'on_boundary')]
+    # sheath-connected walls
+    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
 else:
-    # No boundary conditions for periodic case
     bcs = []
 
 # ======================
