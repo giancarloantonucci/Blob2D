@@ -10,8 +10,8 @@ from irksome import Dt, TimeStepper, GaussLegendre
 # ======================
 
 # Parameters
-g = 1.0  # curvature parameter (g = 2 * rho_s0 / R_c)
-alpha = 0.1  # parallel loss parameter (alpha = rho_s0 / L_parallel)
+g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
+alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 
 # BCs
 BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
@@ -76,22 +76,24 @@ n.interpolate(n0)
 
 if BOUNDARY_TYPE == "dirichlet":
     # sheath-connected walls
-    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
+    bcs = [DirichletBC(V.sub(2), 0, 'on_boundary')]
 else:
     bcs = []
+
+if BOUNDARY_TYPE == "periodic":
+    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
+else:
+    nullspace = None
 
 # ======================
 # WEAK FORMULATION
 # ======================
 
-# ExB drift velocity
 driftvel = as_vector([phi_s.dx(1), -phi_s.dx(0)])
 
-# Upwind flux term (for DG advection)
-driftvel_n = 0.5 * (dot(driftvel, normal) + abs(dot(driftvel, normal)))
-
-def advection_term(w, v_w, driftvel, driftvel_n):
+def advection_term(w, v_w, driftvel):
     """Discontinuous Galerkin advection term with upwinding."""
+    driftvel_n = 0.5 * (dot(driftvel, normal) + abs(dot(driftvel, normal)))
     return (
         (v_w('+') - v_w('-')) * (driftvel_n('+') * w('+') - driftvel_n('-') * w('-')) * dS
         - w * dot(driftvel, grad(v_w)) * dx
@@ -100,13 +102,13 @@ def advection_term(w, v_w, driftvel, driftvel_n):
 F = (
     # Vorticity equation
     Dt(w_s) * v_w * dx
-    + advection_term(w_s, v_w, driftvel, driftvel_n)
+    + advection_term(w_s, v_w, driftvel)
     - g * n_s.dx(1) * v_w * dx
     + alpha * phi_s * n_s * v_w * dx
     
     # Density equation
     + Dt(n_s) * v_n * dx
-    + advection_term(n_s, v_n, driftvel, driftvel_n)
+    + advection_term(n_s, v_n, driftvel)
     + alpha * n_s * phi_s * v_n * dx
     
     # Potential equation
@@ -118,27 +120,25 @@ F = (
 # SOLVER
 # ======================
 
-# https://petsc.org/release/manualpages/SNES/
-
 solver_parameters = {
-    # PETSc's nonlinear solver (SNES) settings
+    # PETSc's nonlinear solver (SNES)
     'snes_type': 'newtonls',  # Newton's method with line search
     'snes_monitor': None,  # Print convergence information
-    'snes_max_it': 100,  # Maximum Newton iterations
-    'snes_rtol': 1e-8,  # Relative tolerance for convergence
+    'snes_max_it': 100,
+    'snes_rtol': 1e-8,
     'snes_linesearch_type': 'bt',  # Backtracking line search for robustness
     
-    # Linear solver settings
-    'mat_type': 'aij',  # Standard sparse matrix format
+    # Linear solver
+    'mat_type': 'aij',  # Sparse matrix format
     'ksp_type': 'fgmres',  # Flexible GMRES for variable preconditioning
     
     # Fieldsplit preconditioner to handle the saddle-point structure
     'pc_type': 'fieldsplit',
-    'pc_fieldsplit_type': 'schur',  # Schur complement method
+    'pc_fieldsplit_type': 'schur',
     'pc_fieldsplit_schur_fact_type': 'full',
     'pc_fieldsplit_schur_precondition': 'selfp',  # Self-precondition Schur
     
-    # Define block structure: [[w, n], [phi]]
+    # Block structure: [[w, n], [phi]]
     'pc_fieldsplit_0_fields': '0,1',  # w and n (hyperbolic)
     'pc_fieldsplit_1_fields': '2',  # phi (elliptic)
     
@@ -150,8 +150,24 @@ solver_parameters = {
     
     # Solver for the phi block
     'fieldsplit_1_ksp_type': 'preonly',
-    'fieldsplit_1_pc_type': 'hypre',  # Algebraic multigrid for efficiency
 }
+
+# Preconditioner for phi based on boundary conditions
+if BOUNDARY_TYPE == "dirichlet":
+    solver_parameters['fieldsplit_1_pc_type'] = 'hypre'
+else:
+    solver_parameters['fieldsplit_1_pc_type'] = 'gamg'
+
+# Alternative direct solver (LU with MUMPS)
+# solver_params = {
+#     'snes_monitor': None,
+#     'snes_max_it': 100,
+#     'snes_linesearch_type': 'l2',
+#     'mat_type': 'aij',
+#     'ksp_type': 'preonly',
+#     'pc_type': 'lu',
+#     'pc_factor_mat_solver_type': 'mumps',
+# }
 
 # ======================
 # TIME STEPPING
@@ -159,48 +175,41 @@ solver_parameters = {
 
 V_t = FunctionSpace(mesh, "R", 0)
 
-t = Function(V_t)  # current time
-dt = Function(V_t)  # time step
-
+t = Function(V_t)
 t.assign(0.0)
+
+dt = Function(V_t)
 dt.assign(END_TIME / TIME_STEPS)
 
-# Time integrator (implicit midpoint rule)
-butcher_tableau = GaussLegendre(1) 
+butcher_tableau = GaussLegendre(1)  # Implicit midpoint rule
 
-# Create time stepper
-stepper = TimeStepper(F, butcher_tableau, t, dt, solution, solver_parameters=solver_parameters, bcs=bcs)
+stepper = TimeStepper(F, butcher_tableau, t, dt, solution,
+                    solver_parameters=solver_parameters,
+                    bcs=bcs, nullspace=nullspace)
 
 # ======================
 # MAIN LOOP
 # ======================
 
-# Output filename based on boundary type
-output_filename = f"Blob2D_implicit_{BOUNDARY_TYPE}.pvd"
-output_file = VTKFile(output_filename)
+output_file = VTKFile(f"Blob2D_implicit_{BOUNDARY_TYPE}.pvd")
 start_time = time.time()
-
 print(f"Running with dt = {float(dt)}, {BOUNDARY_TYPE} BCs")
 
-# Save initial condition
+# Save ICs
 w, n, phi = solution.subfunctions
 output_file.write(w, n, phi, time=float(t))
 
 step_counter = 0
 while step_counter < TIME_STEPS:
-    # Advance solution in time
     step_counter += 1
     stepper.advance()
     t.assign(float(t) + float(dt))
+    print(f"Step {step_counter}/{TIME_STEPS}: t = {float(t):.4f}/{END_TIME}")
     
-    # Save output every OUTPUT_INTERVAL steps
     if step_counter % OUTPUT_INTERVAL == 0:
         print(f"Saving output at t = {float(t)}")
         w, n, phi = solution.subfunctions
         output_file.write(w, n, phi, time=float(t))
         
-    # Progress output
-    print(f"Step {step_counter}/{TIME_STEPS}: t = {float(t)}/{END_TIME}")
-
 end_time = time.time()
 print(f"Done. Total wall-clock time: {end_time - start_time} seconds")

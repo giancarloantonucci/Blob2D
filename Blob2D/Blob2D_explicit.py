@@ -9,8 +9,8 @@ from firedrake import *
 # ======================
 
 # Parameters
-g = 1.0  # curvature parameter (g = 2 * rho_s0 / R_c)
-alpha = 0.1  # parallel loss parameter (alpha = rho_s0 / L_parallel)
+g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
+alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 
 # BCs
 BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
@@ -84,7 +84,7 @@ n_old.assign(n)
 # ======================
 
 if BOUNDARY_TYPE == "dirichlet":
-    # sheath-connected walls
+    # Sheath-connected walls
     bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
 else:
     bcs = []
@@ -93,24 +93,20 @@ else:
 # WEAK FORMULATION
 # ======================
 
+driftvel = as_vector([phi.dx(1), -phi.dx(0)])
+
 def advection_term(w, v_w, driftvel):
     """Discontinuous Galerkin advection term with upwinding."""
-    # Upwind flux
     driftvel_n = 0.5 * (dot(driftvel, normal) + abs(dot(driftvel, normal)))
     return (
         (v_w('+') - v_w('-')) * (driftvel_n('+') * w('+') - driftvel_n('-') * w('-')) * dS
         - w * dot(driftvel, grad(v_w)) * dx
     )
 
-# Step 1: Solve potential equation implicitly from vorticity
 F_phi = (
     + inner(grad(phi), grad(v_phi)) * dx
     + w * v_phi * dx
 )
-
-# Step 2: Update vorticity explicitly
-# ExB drift velocity computed from potential
-driftvel = as_vector([phi.dx(1), -phi.dx(0)])
 
 F_w = (
     (w - w_old) * v_w * dx
@@ -119,7 +115,6 @@ F_w = (
     + DT * alpha * phi * n_old * v_w * dx  # Sheath current loss
 )
 
-# Step 3: Update density explicitly
 F_n = (
     (n - n_old) * v_n * dx
     + DT * advection_term(n_old, v_n, driftvel)
@@ -130,7 +125,11 @@ F_n = (
 # SOLVER
 # ======================
 
-# Solver for Poisson equation
+if BOUNDARY_TYPE == "periodic":
+    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
+else:
+    nullspace = None
+
 if BOUNDARY_TYPE == "dirichlet":
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     phi_solver = NonlinearVariationalSolver(phi_problem, solver_parameters={
@@ -142,8 +141,6 @@ if BOUNDARY_TYPE == "dirichlet":
         'pc_hypre_type': 'boomeramg',
     })
 else:
-    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
-
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     phi_solver = NonlinearVariationalSolver(phi_problem, 
         nullspace=nullspace,
@@ -159,19 +156,17 @@ else:
         }
     )
 
-# Solver for vorticity update
 w_problem = NonlinearVariationalProblem(F_w, w)
 w_solver = NonlinearVariationalSolver(w_problem, solver_parameters={
     'ksp_type': 'preonly',
-    'pc_type': 'jacobi',  # Simple for DG mass matrix
+    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
 })
 
-# Solver for density update
 n_problem = NonlinearVariationalProblem(F_n, n)
 n_solver = NonlinearVariationalSolver(n_problem, solver_parameters={
     'ksp_type': 'preonly',
-    'pc_type': 'jacobi',  # Simple for DG mass matrix
+    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
 })
 
@@ -179,41 +174,31 @@ n_solver = NonlinearVariationalSolver(n_problem, solver_parameters={
 # MAIN LOOP
 # ======================
 
-# Output filename based on boundary type
-output_filename = f"Blob2D_explicit_{BOUNDARY_TYPE}.pvd"
-output_file = VTKFile(output_filename)
+output_file = VTKFile(f"Blob2D_explicit_{BOUNDARY_TYPE}.pvd")
 start_time = time.time()
-
 print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 
-# Save initial condition
+# Save ICs
 t = 0.0
 output_file.write(w, n, phi, time=t)
 
 for step in range(TIME_STEPS):
-    # Update time
     t += DT
     
-    # Step 1: Solve for potential given current vorticity
+    # Solve in sequence
     phi_solver.solve()  # Does reassembly automatically
-    
-    # Step 2: Update vorticity using old values and new potential
     w_solver.solve()  # Does reassembly automatically
-    
-    # Step 3: Update density using old values and new potential
     n_solver.solve()  # Does reassembly automatically
 
-    # Update old values for next time step
+    # Update fields for next time step
     w_old.assign(w)
     n_old.assign(n)
     
-    # Save output every OUTPUT_INTERVAL steps
+    print(f"Step {step+1}/{TIME_STEPS}: t = {t:.4f}/{END_TIME}")
+    
     if (step+1) % OUTPUT_INTERVAL == 0:
         print(f"Saving output at t = {t}")
         output_file.write(w, n, phi, time=t)
         
-    # Progress output
-    print(f"Step {step+1}/{TIME_STEPS}: t = {t}/{END_TIME}")
-
 end_time = time.time()
 print(f"Done. Total wall-clock time: {end_time - start_time} seconds")
