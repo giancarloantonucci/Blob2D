@@ -21,7 +21,7 @@ BOUNDARY_TYPE = "dirichlet"
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 INITIAL_Te = 1.0
-INITIAL_Ti = 0.1
+INITIAL_Ti = 0.05  # Lower this to reduce the ion-pressure brake
 
 # Simulation
 DOMAIN_SIZE = 1.0
@@ -238,7 +238,7 @@ p_i_solver = NonlinearVariationalSolver(p_i_problem, solver_parameters={
 # MAIN LOOP
 # ======================
 
-output_file = VTKFile(f"Blob2D_Te_Ti_explicit_{BOUNDARY_TYPE}.pvd")
+output_file = VTKFile(f"Blob2D_Te_Ti_explicit_cold_{BOUNDARY_TYPE}.pvd")
 start_time = time.time()
 print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 
