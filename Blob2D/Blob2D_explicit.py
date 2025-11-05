@@ -22,7 +22,7 @@ BLOB_WIDTH = 0.1
 
 # Simulation
 DOMAIN_SIZE = 1.0
-MESH_RESOLUTION = 128
+MESH_RESOLUTION = 64
 END_TIME = 10.0
 TIME_STEPS = 10000
 DT = END_TIME / TIME_STEPS
@@ -44,9 +44,9 @@ x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
 # Function Spaces
-V_w = FunctionSpace(mesh, "DQ", 0) # to satisfy LLB condition for F_phi
-V_n = FunctionSpace(mesh, "DQ", 1) # not 0 to avoid 1st-order upwind (too diffusive)
-V_phi = FunctionSpace(mesh, "CG", 1) # for grad in F_phi
+V_w = FunctionSpace(mesh, "DQ", 0)  # to satisfy LLB condition for F_phi
+V_n = FunctionSpace(mesh, "DQ", 1)  # not 0 to avoid 1st-order upwind (too diffusive)
+V_phi = FunctionSpace(mesh, "CG", 1)  # for grad in F_phi
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
@@ -88,6 +88,7 @@ else:
 # WEAK FORMULATION
 # ======================
 
+# E x B drift velocity
 driftvel = as_vector([phi.dx(1), -phi.dx(0)])
 
 def advection_term(w, v_w, driftvel):
@@ -106,63 +107,61 @@ F_phi = (
 F_w = (
     (w - w_old) * v_w * dx
     + DT * advection_term(w_old, v_w, driftvel)
-    - DT * g * n_old.dx(1) * v_w * dx  # Curvature drift term
-    + DT * alpha * phi * n_old * v_w * dx  # Sheath current loss
+    - DT * g * n_old.dx(1) * v_w * dx
+    + DT * alpha * phi * n_old * v_w * dx
 )
 
 F_n = (
     (n - n_old) * v_n * dx
     + DT * advection_term(n_old, v_n, driftvel)
-    + DT * alpha * n_old * phi * v_n * dx  # Particle loss to sheath
+    + DT * alpha * n_old * phi * v_n * dx
 )
 
 # ======================
 # SOLVER
 # ======================
 
-if BOUNDARY_TYPE == "periodic":
-    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
-else:
-    nullspace = None
-
 if BOUNDARY_TYPE == "dirichlet":
+    # Dirichlet BCs. Solution is unique
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     phi_solver = NonlinearVariationalSolver(phi_problem, solver_parameters={
-        'snes_type': 'ksponly',
-        'ksp_type': 'cg',
+        'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+        'ksp_type': 'cg',  # Fastest for SPD linear systems
         'ksp_rtol': 1e-10,
         'ksp_atol': 1e-12,
-        'pc_type': 'hypre',
-        'pc_hypre_type': 'boomeramg',
+        'pc_type': 'hypre',  # Use HYPRE library
+        'pc_hypre_type': 'boomeramg',  # Algebraic Multigrid, best for elliptic
     })
 else:
+    # Periodic BCs. Solution is unique only up to a constant
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
+    # Define the nullspace to make the problem solvable
+    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
     phi_solver = NonlinearVariationalSolver(phi_problem, 
         nullspace=nullspace,
         transpose_nullspace=nullspace,
         near_nullspace=nullspace,
         solver_parameters={
-            'snes_type': 'ksponly',
-            'ksp_type': 'cg',
+            'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+            'ksp_type': 'cg',  # Fastest for SPD linear systems
             'ksp_rtol': 1e-10,
             'ksp_atol': 1e-12,
-            'ksp_initial_guess_nonzero': True,
-            'pc_type': 'gamg',
+            'pc_type': 'gamg',  # Geometric Multigrid, handles nullspaces well
         }
     )
 
 w_problem = NonlinearVariationalProblem(F_w, w)
 w_solver = NonlinearVariationalSolver(w_problem, solver_parameters={
-    'ksp_type': 'preonly',
-    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+    'pc_type': 'jacobi',  # Use matrix diagonal
 })
 
 n_problem = NonlinearVariationalProblem(F_n, n)
 n_solver = NonlinearVariationalSolver(n_problem, solver_parameters={
-    'ksp_type': 'preonly',
-    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+    'pc_type': 'jacobi',  # Use matrix diagonal
 })
 
 # ======================
@@ -180,7 +179,7 @@ output_file.write(w, n, phi, time=t)
 for step in range(TIME_STEPS):
     t += DT
     
-    # Solve in sequence
+    # Solve
     phi_solver.solve()  # Does reassembly automatically
     w_solver.solve()  # Does reassembly automatically
     n_solver.solve()  # Does reassembly automatically
