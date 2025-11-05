@@ -175,10 +175,10 @@ F = (
 solver_parameters = {
     # PETSc's nonlinear solver (SNES)
     'snes_type': 'newtonls',  # Newton's method with line search
-    'snes_monitor': None,  # Print convergence information
-    'snes_max_it': 100,
-    'snes_rtol': 1e-8,
     'snes_linesearch_type': 'bt',  # Backtracking line search for robustness
+    'snes_monitor': None,  # Print convergence information
+    'snes_rtol': 1e-8,
+    'snes_max_it': 100,
     
     # Linear solver
     'mat_type': 'aij',  # Sparse matrix format
@@ -191,10 +191,10 @@ solver_parameters = {
     'pc_fieldsplit_schur_precondition': 'selfp',  # Self-precondition Schur
     
     # Block structure: [[w, n, p_e, p_i], [phi]]
-    'pc_fieldsplit_0_fields': '0, 1, 2, 3',  # w and n (hyperbolic)
-    'pc_fieldsplit_1_fields': '4',  # phi (elliptic)
+    'pc_fieldsplit_0_fields': '0, 1, 2, 3',
+    'pc_fieldsplit_1_fields': '4',
     
-    # Solver for the (w, n) block
+    # Solver for the (w, n, p_e, p_i) block
     'fieldsplit_0_ksp_type': 'gmres',
     'fieldsplit_0_ksp_rtol': 1e-6,
     'fieldsplit_0_pc_type': 'bjacobi',  # Block Jacobi for parallelism
@@ -211,14 +211,16 @@ else:
     solver_parameters['fieldsplit_1_pc_type'] = 'gamg'
 
 # Alternative direct solver (LU with MUMPS)
-# solver_params = {
-#     'snes_monitor': None,
-#     'snes_max_it': 100,
+# solver_parameters = {
+#     'snes_type': 'newtonls',
 #     'snes_linesearch_type': 'l2',
-#     'mat_type': 'aij',
+#     'snes_monitor': None,
+#     'snes_rtol': 1e-8,
+#     'snes_max_it': 100,
 #     'ksp_type': 'preonly',
 #     'pc_type': 'lu',
 #     'pc_factor_mat_solver_type': 'mumps',
+#     'mat_type': 'aij',
 # }
 
 # ======================

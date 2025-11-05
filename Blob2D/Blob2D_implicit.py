@@ -14,7 +14,8 @@ g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 
 # BCs
-BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
+BOUNDARY_TYPE = "periodic"
+# BOUNDARY_TYPE = "dirichlet"
 
 # ICs
 BLOB_AMPLITUDE = 0.5
@@ -27,7 +28,7 @@ END_TIME = 10.0
 TIME_STEPS = 1000
 
 # Printing
-OUTPUT_INTERVAL = 10
+OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME) #  = 10
 
 # =================
 # SETUP
@@ -81,7 +82,7 @@ else:
     bcs = []
 
 if BOUNDARY_TYPE == "periodic":
-    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
+    nullspace = [(2, VectorSpaceBasis(constant=True, comm=mesh.comm))]
 else:
     nullspace = None
 
@@ -121,52 +122,53 @@ F = (
 # ======================
 
 solver_parameters = {
-    # PETSc's nonlinear solver (SNES)
-    'snes_type': 'newtonls',  # Newton's method with line search
-    'snes_monitor': None,  # Print convergence information
-    'snes_max_it': 100,
+    # Nonlinear solver
+    'snes_type': 'newtonls',
+    'snes_linesearch_type': 'l2',
+    'snes_monitor': None,
     'snes_rtol': 1e-8,
-    'snes_linesearch_type': 'bt',  # Backtracking line search for robustness
+    'snes_max_it': 100,
     
     # Linear solver
-    'mat_type': 'aij',  # Sparse matrix format
-    'ksp_type': 'fgmres',  # Flexible GMRES for variable preconditioning
+    'mat_type': 'aij',
+    'ksp_type': 'fgmres',
+    'ksp_rtol': 1e-8,
+    # 'ksp_max_it': 500,
+    'ksp_converged_reason': None,
     
-    # Fieldsplit preconditioner to handle the saddle-point structure
+    # Fieldsplit preconditioner (to handle the saddle-point structure)
     'pc_type': 'fieldsplit',
     'pc_fieldsplit_type': 'schur',
     'pc_fieldsplit_schur_fact_type': 'full',
-    'pc_fieldsplit_schur_precondition': 'selfp',  # Self-precondition Schur
+    'pc_fieldsplit_schur_precondition': 'selfp',
     
     # Block structure: [[w, n], [phi]]
-    'pc_fieldsplit_0_fields': '0,1',  # w and n (hyperbolic)
-    'pc_fieldsplit_1_fields': '2',  # phi (elliptic)
+    'pc_fieldsplit_0_fields': '0, 1',
+    'pc_fieldsplit_1_fields': '2',
     
     # Solver for the (w, n) block
-    'fieldsplit_0_ksp_type': 'gmres',
-    'fieldsplit_0_ksp_rtol': 1e-6,
-    'fieldsplit_0_pc_type': 'bjacobi',  # Block Jacobi for parallelism
-    'fieldsplit_0_sub_pc_type': 'ilu',  # ILU on each block
+    'fieldsplit_0_ksp_type': 'preonly',
+    'fieldsplit_0_pc_type': 'bjacobi',
+    'fieldsplit_0_sub_pc_type': 'ilu',
     
     # Solver for the phi block
-    'fieldsplit_1_ksp_type': 'preonly',
+    'fieldsplit_1_ksp_type': 'cg',
+    'fieldsplit_1_ksp_rtol': 1e-10,
+    'fieldsplit_1_pc_type': 'hypre',
+    'fieldsplit_1_ksp_constant_null_space': True,
 }
 
-# Preconditioner for phi based on boundary conditions
-if BOUNDARY_TYPE == "dirichlet":
-    solver_parameters['fieldsplit_1_pc_type'] = 'hypre'
-else:
-    solver_parameters['fieldsplit_1_pc_type'] = 'gamg'
-
-# Alternative direct solver (LU with MUMPS)
-# solver_params = {
-#     'snes_monitor': None,
-#     'snes_max_it': 100,
+# Alternative: LU with MUMPS
+# solver_parameters = {
+#     'snes_type': 'newtonls',
 #     'snes_linesearch_type': 'l2',
-#     'mat_type': 'aij',
+#     'snes_monitor': None,
+#     'snes_rtol': 1e-8,
+#     'snes_max_it': 100,
 #     'ksp_type': 'preonly',
 #     'pc_type': 'lu',
 #     'pc_factor_mat_solver_type': 'mumps',
+#     'mat_type': 'aij',
 # }
 
 # ======================
@@ -207,7 +209,7 @@ while step_counter < TIME_STEPS:
     print(f"Step {step_counter}/{TIME_STEPS}: t = {float(t):.4f}/{END_TIME}")
     
     if step_counter % OUTPUT_INTERVAL == 0:
-        print(f"Saving output at t = {float(t)}")
+        print(f"Saving output at t = {float(t):.4f}")
         w, n, phi = solution.subfunctions
         output_file.write(w, n, phi, time=float(t))
         

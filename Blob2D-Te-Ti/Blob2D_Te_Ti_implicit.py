@@ -31,7 +31,7 @@ END_TIME = 10.0
 TIME_STEPS = 1000
 
 # Printing
-OUTPUT_INTERVAL = 10
+OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 
 # =================
 # SETUP
@@ -111,15 +111,17 @@ def advection_term(w, v_w, driftvel):
     )
 
 h = CellDiameter(mesh)
-h_avg = (h('+') + h('-'))/2
+h_avg = avg(h)
+# h_avg = (h('+') + h('-'))/2
+sigma = Constant(12.0)  # Penalty parameter (10-20 range)
 
 # Non-dimensional electron temperature
-# T_e_s = p_e_s / n_s
-T_e_s = Constant(1.0) # T_e ≈ (1 + δp_e) (1 - δn) ≈ 1
+T_e_s = p_e_s / n_s
+# T_e_s = Constant(1.0) # T_e ≈ (1 + δp_e) (1 - δn) ≈ 1
 
 # Dynamic sound speed
-# c_s = sqrt((p_e_s + p_i_s) / n_s)
-c_s = Constant(1.0) # T_e ≈ sqrt( ((1 + δp_e) + (p_i0 + δp_i)) / (1 + δn) ) ≈ sqrt(1 + p_i0) ≈ 1
+c_s = sqrt((p_e_s + p_i_s) / n_s)
+# c_s = Constant(1.0) # T_e ≈ sqrt( ((1 + δp_e) + (p_i0 + δp_i)) / (1 + δn) ) ≈ sqrt(1 + p_i0) ≈ 1
 
 F = (
     # Vorticity equation
@@ -147,9 +149,9 @@ F = (
     + inner((1.0 / n_s) * grad(p_i_s), grad(v_phi)) * dx
     + w_s * v_phi * dx
     # SIPG terms for p_i
-    - dot(jump(p_i_s, normal), avg((1.0 / n_s) * grad(v_phi))) * dS  # Consistency term
-    - dot(avg((1.0 / n_s) * grad(p_i_s)), jump(v_phi, normal)) * dS  # Symmetry term
-    + (Constant(10.0)/h_avg) * dot(jump(p_i_s, normal), jump(v_phi, normal)) * dS  # Penalty term
+    - dot(jump(p_i_s, normal), avg((1.0 / n_s) * grad(v_phi))) * dS
+    - dot(avg((1.0 / n_s) * grad(p_i_s)), jump(v_phi, normal)) * dS
+    + sigma/h_avg * dot(jump(p_i_s, normal), jump(v_phi, normal)) * dS
 )
 
 # ======================
@@ -159,10 +161,10 @@ F = (
 solver_parameters = {
     # PETSc's nonlinear solver (SNES)
     'snes_type': 'newtonls',  # Newton's method with line search
-    'snes_monitor': None,  # Print convergence information
-    'snes_max_it': 100,
-    'snes_rtol': 1e-8,
     'snes_linesearch_type': 'bt',  # Backtracking line search for robustness
+    'snes_monitor': None,  # Print convergence information
+    'snes_rtol': 1e-8,
+    'snes_max_it': 100,
     
     # Linear solver
     'mat_type': 'aij',  # Sparse matrix format
@@ -175,10 +177,10 @@ solver_parameters = {
     'pc_fieldsplit_schur_precondition': 'selfp',  # Self-precondition Schur
     
     # Block structure: [[w, n, p_e, p_i], [phi]]
-    'pc_fieldsplit_0_fields': '0, 1, 2, 3',  # w and n (hyperbolic)
-    'pc_fieldsplit_1_fields': '4',  # phi (elliptic)
+    'pc_fieldsplit_0_fields': '0, 1, 2, 3',
+    'pc_fieldsplit_1_fields': '4',
     
-    # Solver for the (w, n) block
+    # Solver for the (w, n, p_e, p_i) block
     'fieldsplit_0_ksp_type': 'gmres',
     'fieldsplit_0_ksp_rtol': 1e-6,
     'fieldsplit_0_pc_type': 'bjacobi',  # Block Jacobi for parallelism
@@ -195,14 +197,16 @@ else:
     solver_parameters['fieldsplit_1_pc_type'] = 'gamg'
 
 # Alternative direct solver (LU with MUMPS)
-# solver_params = {
-#     'snes_monitor': None,
-#     'snes_max_it': 100,
+# solver_parameters = {
+#     'snes_type': 'newtonls',
 #     'snes_linesearch_type': 'l2',
-#     'mat_type': 'aij',
+#     'snes_monitor': None,
+#     'snes_rtol': 1e-8,
+#     'snes_max_it': 100,
 #     'ksp_type': 'preonly',
 #     'pc_type': 'lu',
 #     'pc_factor_mat_solver_type': 'mumps',
+#     'mat_type': 'aij',
 # }
 
 # ======================

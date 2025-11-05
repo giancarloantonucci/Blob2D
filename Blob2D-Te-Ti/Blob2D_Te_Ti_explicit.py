@@ -15,7 +15,8 @@ delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
 m_i_norm = 1.0  # Normalised ion mass
 
 # BCs
-BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
+# BOUNDARY_TYPE = "periodic"
+BOUNDARY_TYPE = "dirichlet"
 
 # ICs
 BLOB_AMPLITUDE = 0.5
@@ -27,24 +28,17 @@ INITIAL_Ti = 0.1
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 128
 END_TIME = 10.0
-TIME_STEPS = 10000
-
-# DT ≤ C * (DX / V_max)
-# * C = Courant number. For DG(p), C ≤ 1/(2p+1)
-# * DX = DOMAIN_SIZE / MESH_RESOLUTION
-# * V_max = max ExB drift velocity ≈ sqrt(g * BLOB_AMPLITUDE * BLOB_WIDTH)
-# 
-# For p = 1 (C = 1/3), DX = 1.0 / 128 (≈ 0.008), V_max = sqrt(1 * 0.5 * 0.1) ≈ 0.3: DT ≤ 0.009
+TIME_STEPS = 20000
 DT = END_TIME / TIME_STEPS
 
 # Printing
-OUTPUT_INTERVAL = 100
+OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 
 # =================
 # SETUP
 # =================
 
-# Create mesh
+# Create mesh (quadrilaterals because more efficient on squares)
 if BOUNDARY_TYPE == "periodic":
     mesh = PeriodicSquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
 else:
@@ -57,8 +51,8 @@ normal = FacetNormal(mesh)
 V_w = FunctionSpace(mesh, "DQ", 1)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_p_e = FunctionSpace(mesh, "DQ", 1)
-V_p_i = FunctionSpace(mesh, "DQ", 1)
-V_phi = FunctionSpace(mesh, "CG", 1)
+V_p_i = FunctionSpace(mesh, "DQ", 2)
+V_phi = FunctionSpace(mesh, "CG", 2)
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
@@ -122,26 +116,25 @@ def advection_term(w, v_w, driftvel):
         - w * dot(driftvel, grad(v_w)) * dx
     )
 
-h = CellDiameter(mesh)
-h_avg = (h('+') + h('-'))/2
-
-F_phi = (
-    + inner(grad(phi), grad(v_phi)) * dx
-    + inner((1.0 / n) * grad(p_i), grad(v_phi)) * dx
-    + w * v_phi * dx
-    # SIPG terms for p_i
-    - dot(jump(p_i, normal), avg((1.0 / n) * grad(v_phi))) * dS  # Consistency term
-    - dot(avg((1.0 / n) * grad(p_i)), jump(v_phi, normal)) * dS  # Symmetry term
-    + (Constant(10.0)/h_avg) * dot(jump(p_i, normal), jump(v_phi, normal)) * dS  # Penalty term
-)
-
-# Non-dimensional electron temperature
+# Electron temperature
 # T_e_old = p_e_old / n_old
-T_e_old = Constant(1.0) # T_e ≈ (1 + δp_e) (1 - δn) ≈ 1
+n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # to avoid division by zero
+T_e_old = p_e_old / n_floor
+# T_e_old = Constant(1.0) # T_e ≈ (1 + δp_e) (1 - δn) ≈ 1
 
-# Dynamic sound speed
+# Ion sound speed
 # c_s = sqrt((p_e_old + p_i_old) / n_old)
-c_s = Constant(1.0) # T_e ≈ sqrt( ((1 + δp_e) + (p_i0 + δp_i)) / (1 + δn) ) ≈ sqrt(1 + p_i0) ≈ 1
+p_total_old = p_e_old + p_i_old
+p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # to avoid sqrt(negative)
+c_s = sqrt(p_total_floor / n_floor) 
+# c_s = Constant(1.0) # T_e ≈ sqrt( ((1 + δp_e) + (p_i0 + δp_i)) / (1 + δn) ) ≈ sqrt(1 + p_i0) ≈ 1
+
+ion_pressure_flux = (1.0 / n0) * grad(p_i)
+F_phi = (
+    inner(grad(phi), grad(v_phi)) * dx
+    + inner(ion_pressure_flux, grad(v_phi)) * dx
+    + w * v_phi * dx
+)
 
 F_w = (
     (w - w_old) * v_w * dx
@@ -156,15 +149,33 @@ F_n = (
     + DT * alpha * (n_old * c_s / T_e_old) * phi * v_n * dx  # Particle loss to sheath
 )
 
+epsilon = Constant(1.0e-3)
+h = CellDiameter(mesh)
+h_avg = (h('+') + h('-')) / 2.0
+
 F_p_e = (
     + (p_e - p_e_old) * v_p_e * dx
     + DT * advection_term(p_e_old, v_p_e, driftvel)
     + DT * alpha * delta_e * p_e_old * c_s * v_p_e * dx
+    # --- Artificial Viscosity using SIPG ---
+    + DT * epsilon * (
+        inner(grad(p_e_old), grad(v_p_e)) * dx
+        - inner(avg(grad(p_e_old)), jump(v_p_e, normal)) * dS
+        - inner(jump(p_e_old, normal), avg(grad(v_p_e))) * dS
+        + (Constant(10.0) / h_avg) * inner(jump(p_e_old), jump(v_p_e)) * dS
+    )
 )
 
 F_p_i = (
     + (p_i - p_i_old) * v_p_i * dx
     + DT * advection_term(p_i_old, v_p_i, driftvel)
+    # --- Artificial Viscosity using SIPG ---
+    + DT * epsilon * (
+        inner(grad(p_i_old), grad(v_p_i)) * dx
+        - inner(avg(grad(p_i_old)), jump(v_p_i, normal)) * dS
+        - inner(jump(p_i_old, normal), avg(grad(v_p_i))) * dS
+        + (Constant(10.0) / h_avg) * inner(jump(p_i_old), jump(v_p_i)) * dS
+    )
 )
 
 # ======================
@@ -261,7 +272,7 @@ for step in range(TIME_STEPS):
     print(f"Step {step+1}/{TIME_STEPS}: t = {t:.4f}/{END_TIME}")
     
     if (step+1) % OUTPUT_INTERVAL == 0:
-        print(f"Saving output at t = {t}")
+        print(f"Saving output at t = {t:.4f}")
         output_file.write(w, n, p_e, p_i, phi, time=t)
         
 end_time = time.time()

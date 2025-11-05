@@ -13,7 +13,8 @@ g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 
 # BCs
-BOUNDARY_TYPE = "periodic" # "periodic" or "dirichlet"
+# BOUNDARY_TYPE = "periodic"
+BOUNDARY_TYPE = "dirichlet"
 
 # ICs
 BLOB_AMPLITUDE = 0.5
@@ -24,22 +25,16 @@ DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 128
 END_TIME = 10.0
 TIME_STEPS = 10000
-
-# CFL is DT ≤ C * (DX / V_max)
-# * C = Courant number. For DG(p), C ≤ 1/(2p+1)
-# * DX = DOMAIN_SIZE / MESH_RESOLUTION
-# * V_max = max ExB drift velocity ≈ sqrt(g * BLOB_AMPLITUDE * BLOB_WIDTH)
-# For p = 1 (C = 1/3), DX = 1.0 / 128 (≈ 0.008), V_max = sqrt(1 * 0.5 * 0.1) ≈ 0.3: DT ≤ 0.009
 DT = END_TIME / TIME_STEPS
 
 # Printing
-OUTPUT_INTERVAL = 100
+OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 
 # =================
 # SETUP
 # =================
 
-# Create mesh
+# Create mesh (quadrilaterals because more efficient on squares)
 if BOUNDARY_TYPE == "periodic":
     mesh = PeriodicSquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
 else:
@@ -104,7 +99,7 @@ def advection_term(w, v_w, driftvel):
     )
 
 F_phi = (
-    + inner(grad(phi), grad(v_phi)) * dx
+    inner(grad(phi), grad(v_phi)) * dx
     + w * v_phi * dx
 )
 
@@ -197,7 +192,7 @@ for step in range(TIME_STEPS):
     print(f"Step {step+1}/{TIME_STEPS}: t = {t:.4f}/{END_TIME}")
     
     if (step+1) % OUTPUT_INTERVAL == 0:
-        print(f"Saving output at t = {t}")
+        print(f"Saving output at t = {t:.4f}")
         output_file.write(w, n, phi, time=t)
         
 end_time = time.time()
