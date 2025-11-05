@@ -12,7 +12,6 @@ from firedrake import *
 g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
-m_i_norm = 1.0  # Normalised ion mass
 
 # BCs
 # BOUNDARY_TYPE = "periodic"
@@ -48,11 +47,11 @@ x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
 # Function Spaces
-V_w = FunctionSpace(mesh, "DQ", 0)
-V_n = FunctionSpace(mesh, "DQ", 1)
-V_p_e = FunctionSpace(mesh, "DQ", 1)
-V_p_i = FunctionSpace(mesh, "DQ", 1)
-V_phi = FunctionSpace(mesh, "CG", 1)
+V_w = FunctionSpace(mesh, "DQ", 0) # to satisfy LLB condition for F_phi
+V_n = FunctionSpace(mesh, "DQ", 1) # not 0 to avoid 1st-order upwind (too diffusive)
+V_p_e = FunctionSpace(mesh, "DQ", 1) # not 0 to avoid 1st-order upwind (too diffusive)
+V_p_i = FunctionSpace(mesh, "DQ", 1) # for grad in F_phi
+V_phi = FunctionSpace(mesh, "CG", 1) # for grad in F_phi
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
