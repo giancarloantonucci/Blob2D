@@ -25,7 +25,7 @@ INITIAL_Ti = 0.1
 
 # Simulation
 DOMAIN_SIZE = 1.0
-MESH_RESOLUTION = 128
+MESH_RESOLUTION = 64
 END_TIME = 10.0
 TIME_STEPS = 20000
 DT = END_TIME / TIME_STEPS
@@ -47,11 +47,11 @@ x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
 # Function Spaces
-V_w = FunctionSpace(mesh, "DQ", 0) # to satisfy LLB condition for F_phi
-V_n = FunctionSpace(mesh, "DQ", 1) # not 0 to avoid 1st-order upwind (too diffusive)
-V_p_e = FunctionSpace(mesh, "DQ", 1) # not 0 to avoid 1st-order upwind (too diffusive)
-V_p_i = FunctionSpace(mesh, "DQ", 1) # for grad in F_phi
-V_phi = FunctionSpace(mesh, "CG", 1) # for grad in F_phi
+V_w = FunctionSpace(mesh, "DQ", 0)  # to satisfy LLB condition for F_phi
+V_n = FunctionSpace(mesh, "DQ", 1)  # not 0 to avoid 1st-order upwind (too diffusive)
+V_p_e = FunctionSpace(mesh, "DQ", 1)  # not 0 to avoid 1st-order upwind (too diffusive)
+V_p_i = FunctionSpace(mesh, "DQ", 1)  # for grad in F_phi
+V_phi = FunctionSpace(mesh, "CG", 1)  # for grad in F_phi
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
@@ -105,6 +105,7 @@ else:
 # WEAK FORMULATION
 # ======================
 
+# E x B drift velocity
 driftvel = as_vector([phi.dx(1), -phi.dx(0)])
 
 def advection_term(w, v_w, driftvel):
@@ -116,19 +117,16 @@ def advection_term(w, v_w, driftvel):
     )
 
 # Electron temperature
-# T_e_old = p_e_old / n_old
-n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # to avoid division by zero
+n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
 T_e_old = p_e_old / n_floor
-# T_e_old = Constant(1.0) # T_e ≈ (1 + δp_e) (1 - δn) ≈ 1
 
 # Ion sound speed
-# c_s = sqrt((p_e_old + p_i_old) / n_old)
 p_total_old = p_e_old + p_i_old
-p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # to avoid sqrt(negative)
+p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
 c_s = sqrt(p_total_floor / n_floor) 
-# c_s = Constant(1.0) # T_e ≈ sqrt( ((1 + δp_e) + (p_i0 + δp_i)) / (1 + δn) ) ≈ sqrt(1 + p_i0) ≈ 1
 
 ion_pressure_flux = (1.0 / n0) * grad(p_i)
+
 F_phi = (
     inner(grad(phi), grad(v_phi)) * dx
     + inner(ion_pressure_flux, grad(v_phi)) * dx
@@ -138,38 +136,35 @@ F_phi = (
 F_w = (
     (w - w_old) * v_w * dx
     + DT * advection_term(w_old, v_w, driftvel)
-    - DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx  # Curvature drift term
-    + DT * alpha * (n_old * c_s / T_e_old) * phi * v_w * dx  # Sheath current loss    
+    - DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx
+    + DT * alpha * (n_old * c_s / T_e_old) * phi * v_w * dx
 )
 
 F_n = (
     (n - n_old) * v_n * dx
     + DT * advection_term(n_old, v_n, driftvel)
-    + DT * alpha * (n_old * c_s / T_e_old) * phi * v_n * dx  # Particle loss to sheath
+    + DT * alpha * (n_old * c_s / T_e_old) * phi * v_n * dx
 )
-
-epsilon = Constant(1.0e-3)
-h = CellDiameter(mesh)
-h_avg = (h('+') + h('-')) / 2.0
 
 F_p_e = (
     + (p_e - p_e_old) * v_p_e * dx
     + DT * advection_term(p_e_old, v_p_e, driftvel)
     + DT * alpha * delta_e * p_e_old * c_s * v_p_e * dx
-    # --- Artificial Viscosity using SIPG ---
-    + DT * epsilon * (
-        inner(grad(p_e_old), grad(v_p_e)) * dx
-        - inner(avg(grad(p_e_old)), jump(v_p_e, normal)) * dS
-        - inner(jump(p_e_old, normal), avg(grad(v_p_e))) * dS
-        + (Constant(10.0) / h_avg) * inner(jump(p_e_old), jump(v_p_e)) * dS
-    )
 )
+
+# Small parameter to control the amount of diffusion
+epsilon = Constant(1.0e-4)
+# Cell diameter, needed for SIPG
+h = CellDiameter(mesh)
+# Average cell diameter on a facet
+h_avg = (h('+') + h('-')) / 2.0
 
 F_p_i = (
     + (p_i - p_i_old) * v_p_i * dx
     + DT * advection_term(p_i_old, v_p_i, driftvel)
-    # --- Artificial Viscosity using SIPG ---
-    + DT * epsilon * (
+    # The advection term creates numerical wiggles that can cause p_i to go
+    # negative. We add artificial viscosity (SIPG) to dampen these wiggles
+    + DT * Constant(1.0e-4) * (
         inner(grad(p_i_old), grad(v_p_i)) * dx
         - inner(avg(grad(p_i_old)), jump(v_p_i, normal)) * dS
         - inner(jump(p_i_old, normal), avg(grad(v_p_i))) * dS
@@ -181,63 +176,61 @@ F_p_i = (
 # SOLVER
 # ======================
 
-if BOUNDARY_TYPE == "periodic":
-    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
-else:
-    nullspace = None
-
 if BOUNDARY_TYPE == "dirichlet":
+    # Dirichlet BCs. Solution is unique
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     phi_solver = NonlinearVariationalSolver(phi_problem, solver_parameters={
-        'snes_type': 'ksponly',
-        'ksp_type': 'cg',
+        'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+        'ksp_type': 'cg',  # Fastest for SPD linear systems
         'ksp_rtol': 1e-10,
         'ksp_atol': 1e-12,
-        'pc_type': 'hypre',
-        'pc_hypre_type': 'boomeramg',
+        'pc_type': 'hypre',  # Use HYPRE library
+        'pc_hypre_type': 'boomeramg',  # Algebraic Multigrid, best for elliptic
     })
 else:
+    # Periodic BCs. Solution is unique only up to a constant
     phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
+    # Define the nullspace to make the problem solvable
+    nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
     phi_solver = NonlinearVariationalSolver(phi_problem, 
         nullspace=nullspace,
         transpose_nullspace=nullspace,
         near_nullspace=nullspace,
         solver_parameters={
-            'snes_type': 'ksponly',
-            'ksp_type': 'cg',
+            'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+            'ksp_type': 'cg',  # Fastest for SPD linear systems
             'ksp_rtol': 1e-10,
             'ksp_atol': 1e-12,
-            'ksp_initial_guess_nonzero': True,
-            'pc_type': 'gamg',
+            'pc_type': 'gamg',  # Geometric Multigrid, handles nullspaces well
         }
     )
 
 w_problem = NonlinearVariationalProblem(F_w, w)
 w_solver = NonlinearVariationalSolver(w_problem, solver_parameters={
-    'ksp_type': 'preonly',
-    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+    'pc_type': 'jacobi',  # Use matrix diagonal
 })
 
 n_problem = NonlinearVariationalProblem(F_n, n)
 n_solver = NonlinearVariationalSolver(n_problem, solver_parameters={
-    'ksp_type': 'preonly',
-    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+    'pc_type': 'jacobi',  # Use matrix diagonal
 })
 
 p_e_problem = NonlinearVariationalProblem(F_p_e, p_e)
 p_e_solver = NonlinearVariationalSolver(p_e_problem, solver_parameters={
-    'ksp_type': 'preonly',
-    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+    'pc_type': 'jacobi',  # Use matrix diagonal
 })
 
 p_i_problem = NonlinearVariationalProblem(F_p_i, p_i)
 p_i_solver = NonlinearVariationalSolver(p_i_problem, solver_parameters={
-    'ksp_type': 'preonly',
-    'pc_type': 'jacobi',
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+    'pc_type': 'jacobi',  # Use matrix diagonal
 })
 
 # ======================
@@ -255,7 +248,7 @@ output_file.write(w, n, p_e, p_i, phi, time=t)
 for step in range(TIME_STEPS):
     t += DT
     
-    # Solve in sequence
+    # Solve
     phi_solver.solve()  # Does reassembly automatically
     w_solver.solve()  # Does reassembly automatically
     n_solver.solve()  # Does reassembly automatically
