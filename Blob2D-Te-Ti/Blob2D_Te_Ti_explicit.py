@@ -18,10 +18,11 @@ delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
 BOUNDARY_TYPE = "dirichlet"
 
 # ICs
+BACKGROUND_PLASMA = 1.0
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 INITIAL_Te = 1.0
-INITIAL_Ti = 0.05  # Lower this to reduce the ion-pressure brake
+INITIAL_Ti = 0.01  # Lower this to reduce the ion-pressure brake
 
 # Simulation
 DOMAIN_SIZE = 1.0
@@ -81,7 +82,7 @@ w.interpolate(0.0)
 w_old.assign(w)
 
 x_c = y_c = DOMAIN_SIZE / 2.0
-n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
+n0 = BACKGROUND_PLASMA + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
 n.interpolate(n0)
 n_old.assign(n)
 
@@ -125,7 +126,7 @@ p_total_old = p_e_old + p_i_old
 p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
 c_s = sqrt(p_total_floor / n_floor) 
 
-ion_pressure_flux = (1.0 / n0) * grad(p_i)
+ion_pressure_flux = (1.0 / BACKGROUND_PLASMA) * grad(p_i)
 
 F_phi = (
     inner(grad(phi), grad(v_phi)) * dx
@@ -238,7 +239,7 @@ p_i_solver = NonlinearVariationalSolver(p_i_problem, solver_parameters={
 # MAIN LOOP
 # ======================
 
-output_file = VTKFile(f"Blob2D_Te_Ti_explicit_cold_{BOUNDARY_TYPE}.pvd")
+output_file = VTKFile(f"Blob2D_Te_Ti_explicit_{BOUNDARY_TYPE}.pvd")
 start_time = time.time()
 print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 

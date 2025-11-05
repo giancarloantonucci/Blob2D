@@ -17,6 +17,7 @@ alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 BOUNDARY_TYPE = "dirichlet"
 
 # ICs
+BACKGROUND_PLASMA = 1.0
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 
@@ -70,7 +71,7 @@ w.interpolate(0.0)
 w_old.assign(w)
 
 x_c = y_c = DOMAIN_SIZE / 2.0
-n0 = 1.0 + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
+n0 = BACKGROUND_PLASMA + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
 n.interpolate(n0)
 n_old.assign(n)
 
