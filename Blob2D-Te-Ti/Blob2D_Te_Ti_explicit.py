@@ -164,7 +164,7 @@ F_p_i = (
     + DT * advection_term(p_i_old, v_p_i, driftvel)
     # The advection term creates numerical wiggles that can cause p_i to go
     # negative. We add artificial viscosity (SIPG) to dampen these wiggles
-    + DT * Constant(1.0e-4) * (
+    + DT * epsilon * (
         inner(grad(p_i_old), grad(v_p_i)) * dx
         - inner(avg(grad(p_i_old)), jump(v_p_i, normal)) * dS
         - inner(jump(p_i_old, normal), avg(grad(v_p_i))) * dS
