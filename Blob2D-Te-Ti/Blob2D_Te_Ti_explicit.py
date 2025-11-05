@@ -48,11 +48,11 @@ x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
 # Function Spaces
-V_w = FunctionSpace(mesh, "DQ", 1)
+V_w = FunctionSpace(mesh, "DQ", 0)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_p_e = FunctionSpace(mesh, "DQ", 1)
-V_p_i = FunctionSpace(mesh, "DQ", 2)
-V_phi = FunctionSpace(mesh, "CG", 2)
+V_p_i = FunctionSpace(mesh, "DQ", 1)
+V_phi = FunctionSpace(mesh, "CG", 1)
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
