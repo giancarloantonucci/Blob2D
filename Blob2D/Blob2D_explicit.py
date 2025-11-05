@@ -44,9 +44,9 @@ x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
 # Function Spaces
-V_w = FunctionSpace(mesh, "DQ", 1)
-V_n = FunctionSpace(mesh, "DQ", 1)
-V_phi = FunctionSpace(mesh, "CG", 1)
+V_w = FunctionSpace(mesh, "DQ", 0) # to satisfy LLB condition for F_phi
+V_n = FunctionSpace(mesh, "DQ", 1) # not 0 to avoid 1st-order upwind (too diffusive)
+V_phi = FunctionSpace(mesh, "CG", 1) # for grad in F_phi
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
