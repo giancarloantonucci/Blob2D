@@ -138,6 +138,7 @@ def advection_term(q, v_q, v_ExB):
 # Electron temperature
 n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
 T_e_old = p_e_old / n_floor
+T_e_floor = conditional(T_e_old > 1e-4, T_e_old, 1e-4)  # Avoid division by zero in the loss terms
 
 # Ion sound speed
 p_total_old = p_e_old + p_i_old
@@ -156,14 +157,14 @@ L_w = (
     w_old * v_w * dx
     - DT * advection_term(w_old, v_w, v_ExB)
     + DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx
-    - DT * alpha * (n_old * c_s / T_e_old) * phi * v_w * dx
+    - DT * alpha * (n_old * c_s / T_e_floor) * phi * v_w * dx
 )
 
 a_n = u_n * v_n * dx
 L_n = (
     n_old * v_n * dx
     - DT * advection_term(n_old, v_n, v_ExB)
-    - DT * alpha * (n_old * c_s / T_e_old) * phi * v_n * dx
+    - DT * alpha * (n_old * c_s / T_e_floor) * phi * v_n * dx
 )
 
 a_p_e = u_p_e * v_p_e * dx
