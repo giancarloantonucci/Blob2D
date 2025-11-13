@@ -14,11 +14,11 @@ alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
 
 # BCs
-BOUNDARY_TYPE = "periodic"
-# BOUNDARY_TYPE = "dirichlet"
+# BOUNDARY_TYPE = "periodic"
+BOUNDARY_TYPE = "dirichlet"
 
 # ICs
-BACKGROUND_PLASMA = 1.0
+BACKGROUND_PLASMA = 0.0
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 INITIAL_Te = 1.0
