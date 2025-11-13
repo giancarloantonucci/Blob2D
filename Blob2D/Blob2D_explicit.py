@@ -13,8 +13,8 @@ g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 
 # BCs
-# BOUNDARY_TYPE = "periodic"
-BOUNDARY_TYPE = "dirichlet"
+BOUNDARY_TYPE = "periodic"
+# BOUNDARY_TYPE = "dirichlet"
 
 # ICs
 BACKGROUND_PLASMA = 1.0
@@ -45,9 +45,9 @@ x, y = SpatialCoordinate(mesh)
 normal = FacetNormal(mesh)
 
 # Function Spaces
-V_w = FunctionSpace(mesh, "DQ", 0)  # to satisfy LLB condition for F_phi
-V_n = FunctionSpace(mesh, "DQ", 1)  # not 0 to avoid 1st-order upwind (too diffusive)
-V_phi = FunctionSpace(mesh, "CG", 1)  # for grad in F_phi
+V_w = FunctionSpace(mesh, "DQ", 1)
+V_n = FunctionSpace(mesh, "DQ", 1)
+V_phi = FunctionSpace(mesh, "CG", 2)
 
 # Fields at current time step
 w = Function(V_w, name="vorticity")
@@ -90,15 +90,26 @@ else:
 # ======================
 
 # E x B drift velocity
-driftvel = as_vector([phi.dx(1), -phi.dx(0)])
+v_ExB = as_vector([phi.dx(1), -phi.dx(0)])
 
-def advection_term(w, v_w, driftvel):
-    """Discontinuous Galerkin advection term with upwinding."""
-    driftvel_n = 0.5 * (dot(driftvel, normal) + abs(dot(driftvel, normal)))
-    return (
-        (v_w('+') - v_w('-')) * (driftvel_n('+') * w('+') - driftvel_n('-') * w('-')) * dS
-        - w * dot(driftvel, grad(v_w)) * dx
-    )
+def advection_term(q, v_q, v_ExB):
+    """
+    DG advection: - int(q * v_ExB . grad(v_q)) dx + int(flux) dS
+    """
+    # Conservation step
+    # We calculate the normal velocity using the averaged field
+    v_ExB_n_avg = dot(avg(v_ExB), normal('+'))
+    # Upwinding step
+    # If un_avg > 0: Flow is (+) -> (-). We carry q(+) info
+    # If un_avg < 0: Flow is (-) -> (+). We carry q(-) info
+    flux_upwind = conditional(v_ExB_n_avg > 0, v_ExB_n_avg * q('+'), v_ExB_n_avg * q('-'))
+    # Facet term
+    # (Jump in test function) * (Upwinded Flux)
+    flux_term = (v_q('+') - v_q('-')) * flux_upwind * dS
+    # Interior term
+    # Integration by parts (standard DG)
+    interior_term = q * dot(v_ExB, grad(v_q)) * dx
+    return flux_term - interior_term
 
 F_phi = (
     inner(grad(phi), grad(v_phi)) * dx
@@ -107,14 +118,14 @@ F_phi = (
 
 F_w = (
     (w - w_old) * v_w * dx
-    + DT * advection_term(w_old, v_w, driftvel)
+    + DT * advection_term(w_old, v_w, v_ExB)
     - DT * g * n_old.dx(1) * v_w * dx
     + DT * alpha * phi * n_old * v_w * dx
 )
 
 F_n = (
     (n - n_old) * v_n * dx
-    + DT * advection_term(n_old, v_n, driftvel)
+    + DT * advection_term(n_old, v_n, v_ExB)
     + DT * alpha * n_old * phi * v_n * dx
 )
 
@@ -155,14 +166,16 @@ w_problem = NonlinearVariationalProblem(F_w, w)
 w_solver = NonlinearVariationalSolver(w_problem, solver_parameters={
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
     'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
-    'pc_type': 'jacobi',  # Use matrix diagonal
+    'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
+    'sub_pc_type': 'ilu',  # Invert the local blocks
 })
 
 n_problem = NonlinearVariationalProblem(F_n, n)
 n_solver = NonlinearVariationalSolver(n_problem, solver_parameters={
     'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
     'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
-    'pc_type': 'jacobi',  # Use matrix diagonal
+    'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
+    'sub_pc_type': 'ilu',  # Invert the local blocks
 })
 
 # ======================
