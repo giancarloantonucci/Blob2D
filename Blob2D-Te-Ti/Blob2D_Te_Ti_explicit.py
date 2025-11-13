@@ -14,8 +14,8 @@ alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
 
 # BCs
-# BOUNDARY_TYPE = "periodic"
-BOUNDARY_TYPE = "dirichlet"
+BOUNDARY_TYPE = "periodic"
+# BOUNDARY_TYPE = "dirichlet"
 
 # ICs
 BACKGROUND_PLASMA = 1.0
@@ -124,8 +124,8 @@ def advection_term(q, v_q, v_ExB):
     # We calculate the normal velocity using the averaged field
     v_ExB_n_avg = dot(avg(v_ExB), normal('+'))
     # Upwinding step
-    # If un_avg > 0: Flow is (+) -> (-). We carry q(+) info
-    # If un_avg < 0: Flow is (-) -> (+). We carry q(-) info
+    # If v_ExB_n_avg > 0: Flow is (+) -> (-). We carry q(+) info
+    # If v_ExB_n_avg < 0: Flow is (-) -> (+). We carry q(-) info
     flux_upwind = conditional(v_ExB_n_avg > 0, v_ExB_n_avg * q('+'), v_ExB_n_avg * q('-'))
     # Facet term
     # (Jump in test function) * (Upwinded Flux)
@@ -260,19 +260,28 @@ output_file.write(w, n, p_e, p_i, phi, time=t)
 for step in range(TIME_STEPS):
     t += DT
     
-    # Solve
-    # solve() here re-assembles the RHS vectors L
-    phi_solver.solve()  # Does reassembly automatically
-    w_solver.solve()  # Does reassembly automatically
-    n_solver.solve()  # Does reassembly automatically
-    p_e_solver.solve()  # Does reassembly automatically
-    p_i_solver.solve()  # Does reassembly automatically
-
-    # Update fields for next time step
+    # Update fields with the results from the last step
     w_old.assign(w)
     n_old.assign(n)
     p_e_old.assign(p_e)
     p_i_old.assign(p_i)
+    
+    # Enforce solvability condition for potential equation
+    # The RHS (w) must have zero mean
+    # Both pressure terms vanish automatically when tested against the nullspace
+    if BOUNDARY_TYPE == "periodic":
+        w_old_integral = assemble(w_old * dx)
+        area = DOMAIN_SIZE * DOMAIN_SIZE
+        w_old_avg = w_old_integral / area
+        w_old.assign(w_old - w_old_avg)
+    
+    # Solve
+    # solve() here re-assembles the RHS vectors L
+    phi_solver.solve()
+    w_solver.solve()
+    n_solver.solve()
+    p_e_solver.solve()
+    p_i_solver.solve()
     
     print(f"Step {step+1}/{TIME_STEPS}: t = {t:.4f}/{END_TIME}")
     
