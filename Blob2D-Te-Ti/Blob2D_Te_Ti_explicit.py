@@ -144,19 +144,11 @@ p_total_old = p_e_old + p_i_old
 p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
 c_s = sqrt(p_total_floor / n_floor) 
 
-inv_n0 = (1.0 / BACKGROUND_PLASMA)
-
-# F_phi = (
-#     inner(grad(phi), grad(v_phi)) * dx
-#     + w * v_phi * dx
-#     + inner(inv_n0 * grad(p_i), grad(v_phi)) * dx
-#     + inner(jump(p_i, normal), avg(inv_n0 * grad(v_phi))) * dS
-# )
 a_phi = inner(grad(u_phi), grad(v_phi)) * dx
 L_phi = (
     - w_old * v_phi * dx
-    - inner(inv_n0 * grad(p_i_old), grad(v_phi)) * dx
-    - inner(jump(p_i_old, normal), avg(inv_n0 * grad(v_phi))) * dS
+    - inner(grad(p_i_old), grad(v_phi)) * dx
+    - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
 )
 
 a_w = u_w * v_w * dx
