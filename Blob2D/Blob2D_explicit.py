@@ -13,8 +13,8 @@ g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
 
 # BCs
-BOUNDARY_TYPE = "periodic"
-# BOUNDARY_TYPE = "dirichlet"
+# BOUNDARY_TYPE = "periodic"
+BOUNDARY_TYPE = "dirichlet"
 
 # ICs
 BACKGROUND_PLASMA = 1.0
@@ -57,6 +57,11 @@ phi = Function(V_phi, name="potential")
 # Fields at previous time step
 w_old = Function(V_w)
 n_old = Function(V_n)
+
+# Trial functions (Needed for the LHS 'a' of Linear Problems)
+u_w = TrialFunction(V_w)
+u_n = TrialFunction(V_n)
+u_phi = TrialFunction(V_phi)
 
 # Test functions
 v_w = TestFunction(V_w)
@@ -111,22 +116,22 @@ def advection_term(q, v_q, v_ExB):
     interior_term = q * dot(v_ExB, grad(v_q)) * dx
     return flux_term - interior_term
 
-F_phi = (
-    inner(grad(phi), grad(v_phi)) * dx
-    + w * v_phi * dx
+a_phi = inner(grad(u_phi), grad(v_phi)) * dx
+L_phi = -w * v_phi * dx
+
+a_w = u_w * v_w * dx
+L_w = (
+    w_old * v_w * dx 
+    - DT * advection_term(w_old, v_w, v_ExB)
+    + DT * g * n_old.dx(1) * v_w * dx
+    - DT * alpha * phi * n_old * v_w * dx
 )
 
-F_w = (
-    (w - w_old) * v_w * dx
-    + DT * advection_term(w_old, v_w, v_ExB)
-    - DT * g * n_old.dx(1) * v_w * dx
-    + DT * alpha * phi * n_old * v_w * dx
-)
-
-F_n = (
-    (n - n_old) * v_n * dx
-    + DT * advection_term(n_old, v_n, v_ExB)
-    + DT * alpha * n_old * phi * v_n * dx
+a_n = u_n * v_n * dx
+L_n = (
+    n_old * v_n * dx
+    - DT * advection_term(n_old, v_n, v_ExB)
+    - DT * alpha * n_old * phi * v_n * dx
 )
 
 # ======================
@@ -135,45 +140,32 @@ F_n = (
 
 if BOUNDARY_TYPE == "dirichlet":
     # Dirichlet BCs. Solution is unique
-    phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
-    phi_solver = NonlinearVariationalSolver(phi_problem, solver_parameters={
-        'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
+    phi_problem = LinearVariationalProblem(a_phi, L_phi, phi, bcs=bcs)
+    phi_solver = LinearVariationalSolver(phi_problem, solver_parameters={
         'ksp_type': 'cg',  # Fastest for SPD linear systems
-        'ksp_rtol': 1e-10,
-        'ksp_atol': 1e-12,
         'pc_type': 'hypre',  # Use HYPRE library
         'pc_hypre_type': 'boomeramg',  # Algebraic Multigrid, best for elliptic
     })
 else:
     # Periodic BCs. Solution is unique only up to a constant
-    phi_problem = NonlinearVariationalProblem(F_phi, phi, bcs=bcs)
     # Define the nullspace to make the problem solvable
     nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
-    phi_solver = NonlinearVariationalSolver(phi_problem, 
-        nullspace=nullspace,
-        transpose_nullspace=nullspace,
-        near_nullspace=nullspace,
-        solver_parameters={
-            'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
-            'ksp_type': 'cg',  # Fastest for SPD linear systems
-            'ksp_rtol': 1e-10,
-            'ksp_atol': 1e-12,
-            'pc_type': 'gamg',  # Geometric Multigrid, handles nullspaces well
-        }
-    )
+    phi_problem = LinearVariationalProblem(a_phi, L_phi, phi, bcs=bcs)
+    phi_solver = LinearVariationalSolver(phi_problem, nullspace=nullspace, solver_parameters={
+        'ksp_type': 'cg',  # Fastest for SPD linear systems
+        'pc_type': 'gamg',  # Geometric Multigrid, handles nullspaces well
+    })
 
-w_problem = NonlinearVariationalProblem(F_w, w)
-w_solver = NonlinearVariationalSolver(w_problem, solver_parameters={
-    'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
-    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+w_problem = LinearVariationalProblem(a_w, L_w, w)
+w_solver = LinearVariationalSolver(w_problem, solver_parameters={
+    'ksp_type': 'preonly',  # Apply preconditioner once
     'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
     'sub_pc_type': 'ilu',  # Invert the local blocks
 })
 
-n_problem = NonlinearVariationalProblem(F_n, n)
-n_solver = NonlinearVariationalSolver(n_problem, solver_parameters={
-    'snes_type': 'ksponly',  # Skip Newton, go straight to linear solve
-    'ksp_type': 'preonly',  # Apply preconditioner once, no iteration
+n_problem = LinearVariationalProblem(a_n, L_n, n)
+n_solver = LinearVariationalSolver(n_problem, solver_parameters={
+    'ksp_type': 'preonly',  # Apply preconditioner once
     'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
     'sub_pc_type': 'ilu',  # Invert the local blocks
 })
@@ -194,9 +186,10 @@ for step in range(TIME_STEPS):
     t += DT
     
     # Solve
-    phi_solver.solve()  # Does reassembly automatically
-    w_solver.solve()  # Does reassembly automatically
-    n_solver.solve()  # Does reassembly automatically
+    # .solve() here re-assembles the RHS vector L
+    phi_solver.solve()
+    w_solver.solve()
+    n_solver.solve()
 
     # Update fields for next time step
     w_old.assign(w)
