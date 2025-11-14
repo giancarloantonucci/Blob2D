@@ -5,26 +5,26 @@ import time
 from firedrake import *
 
 # ======================
-# PARAMETERS
+# CONFIGURATION
 # ======================
 
-# Parameters
-g = 1.0  # Curvature parameter (g = 2 * rho_s0 / R_c)
-alpha = 0.1  # Parallel loss parameter (alpha = rho_s0 / L_parallel)
+# Physics parameters
+g = 1.0        # Curvature (g = 2 * rho_s0 / R_c)
+alpha = 0.1    # Parallel loss (alpha = rho_s0 / L_parallel)
 delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
 
 # BCs
-# BOUNDARY_TYPE = "periodic"
 BOUNDARY_TYPE = "dirichlet"
+# BOUNDARY_TYPE = "periodic"
 
 # ICs
-BACKGROUND_PLASMA = 0.0
+BACKGROUND_PLASMA = 1.0
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 INITIAL_Te = 1.0
-INITIAL_Ti = 0.01  # Lower this to reduce the ion-pressure brake
+INITIAL_Ti = 0.01
 
-# Simulation
+# Simulation parameters
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 64
 END_TIME = 10.0
@@ -34,20 +34,17 @@ DT = END_TIME / TIME_STEPS
 # Printing
 OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 
-# =================
-# SETUP
-# =================
+# ======================
+# MESH & FUNCTION SPACES
+# ======================
 
-# Create mesh (quadrilaterals because more efficient on squares)
+# Mesh
 if BOUNDARY_TYPE == "periodic":
     mesh = PeriodicSquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
 else:
     mesh = SquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
 
-x, y = SpatialCoordinate(mesh)
-normal = FacetNormal(mesh)
-
-# Function Spaces
+# Function spaces
 V_w = FunctionSpace(mesh, "DQ", 1)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_p_e = FunctionSpace(mesh, "DQ", 1)
@@ -67,13 +64,6 @@ n_old = Function(V_n)
 p_e_old = Function(V_p_e)
 p_i_old = Function(V_p_i)
 
-# Trial functions
-u_w = TrialFunction(V_w)
-u_n = TrialFunction(V_n)
-u_p_e = TrialFunction(V_p_e)
-u_p_i = TrialFunction(V_p_i)
-u_phi = TrialFunction(V_phi)
-
 # Test functions
 v_w = TestFunction(V_w)
 v_n = TestFunction(V_n)
@@ -81,30 +71,35 @@ v_p_e = TestFunction(V_p_e)
 v_p_i = TestFunction(V_p_i)
 v_phi = TestFunction(V_phi)
 
+# Trial functions
+w_trial = TrialFunction(V_w)
+n_trial = TrialFunction(V_n)
+p_e_trial = TrialFunction(V_p_e)
+p_i_trial = TrialFunction(V_p_i)
+phi_trial = TrialFunction(V_phi)
+
 # ======================
 # INITIAL CONDITIONS
 # ======================
 
-w.interpolate(0.0)
-w_old.assign(w)
+x, y = SpatialCoordinate(mesh)
 
-x_c = y_c = DOMAIN_SIZE / 2.0
-n0 = BACKGROUND_PLASMA + BLOB_AMPLITUDE * exp(-((x - x_c)**2 + (y - y_c)**2) / (BLOB_WIDTH**2))
+w.interpolate(0.0)
+
+centre = DOMAIN_SIZE / 2.0
+r2 = (x - centre)**2 + (y - centre)**2
+n0 = BACKGROUND_PLASMA + BLOB_AMPLITUDE * exp(-r2 / (BLOB_WIDTH**2))
 n.interpolate(n0)
-n_old.assign(n)
 
 p_e.interpolate(n0 * INITIAL_Te)
-p_e_old.assign(p_e)
 
 p_i.interpolate(n0 * INITIAL_Ti)
-p_i_old.assign(p_i)
 
 # ======================
 # BOUNDARY CONDITIONS
 # ======================
 
 if BOUNDARY_TYPE == "dirichlet":
-    # Sheath-connected walls
     bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
 else:
     bcs = []
@@ -113,15 +108,14 @@ else:
 # WEAK FORMULATION
 # ======================
 
-# E x B drift velocity
 v_ExB = as_vector([phi.dx(1), -phi.dx(0)])
 
+normal = FacetNormal(mesh)
+
 def advection_term(q, v_q, v_ExB):
-    """
-    DG advection: - int(q * v_ExB . grad(v_q)) dx + int(flux) dS
-    """
+    "From https://www.firedrakeproject.org/demos/DG_advection.py.html"
     # Conservation step
-    # We calculate the normal velocity using the averaged field
+    # Calculate the normal velocity using the averaged field
     v_ExB_n_avg = dot(avg(v_ExB), normal('+'))
     # Upwinding step
     # If v_ExB_n_avg > 0: Flow is (+) -> (-). We carry q(+) info
@@ -132,8 +126,16 @@ def advection_term(q, v_q, v_ExB):
     flux_term = (v_q('+') - v_q('-')) * flux_upwind * dS
     # Interior term
     # Integration by parts (standard DG)
-    interior_term = q * dot(v_ExB, grad(v_q)) * dx
+    interior_term = q * div(v_q * v_ExB) * dx
     return flux_term - interior_term
+
+# Potential equation
+a_phi = inner(grad(phi_trial), grad(v_phi)) * dx
+L_phi = (
+    - w_old * v_phi * dx
+    - inner(grad(p_i_old), grad(v_phi)) * dx
+    - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
+)
 
 # Electron temperature
 n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
@@ -143,16 +145,9 @@ T_e_floor = conditional(T_e_old > 1e-4, T_e_old, 1e-4)  # Avoid division by zero
 # Ion sound speed
 p_total_old = p_e_old + p_i_old
 p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
-c_s = sqrt(p_total_floor / n_floor) 
+c_s = sqrt(p_total_floor / n_floor)
 
-a_phi = inner(grad(u_phi), grad(v_phi)) * dx
-L_phi = (
-    - w_old * v_phi * dx
-    - inner(grad(p_i_old), grad(v_phi)) * dx
-    - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
-)
-
-a_w = u_w * v_w * dx
+a_w = w_trial * v_w * dx
 L_w = (
     w_old * v_w * dx
     - DT * advection_term(w_old, v_w, v_ExB)
@@ -160,14 +155,14 @@ L_w = (
     - DT * alpha * (n_old * c_s / T_e_floor) * phi * v_w * dx
 )
 
-a_n = u_n * v_n * dx
+a_n = n_trial * v_n * dx
 L_n = (
     n_old * v_n * dx
     - DT * advection_term(n_old, v_n, v_ExB)
     - DT * alpha * (n_old * c_s / T_e_floor) * phi * v_n * dx
 )
 
-a_p_e = u_p_e * v_p_e * dx
+a_p_e = p_e_trial * v_p_e * dx
 L_p_e = (
     p_e_old * v_p_e * dx
     - DT * advection_term(p_e_old, v_p_e, v_ExB)
@@ -181,7 +176,7 @@ h = CellDiameter(mesh)
 # Average cell diameter on a facet
 h_avg = (h('+') + h('-')) / 2.0
 
-a_p_i = u_p_i * v_p_i * dx
+a_p_i = p_i_trial * v_p_i * dx
 L_p_i = (
     p_i_old * v_p_i * dx
     - DT * advection_term(p_i_old, v_p_i, v_ExB)
@@ -290,5 +285,4 @@ for step in range(TIME_STEPS):
         print(f"Saving output at t = {t:.4f}")
         output_file.write(w, n, p_e, p_i, phi, time=t)
         
-end_time = time.time()
-print(f"Done. Total wall-clock time: {end_time - start_time} seconds")
+print(f"Done in {time.time() - start_time} seconds")
