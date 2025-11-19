@@ -130,17 +130,11 @@ L_phi = (
     - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
 )
 
-# Electron temperature
-# n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
-# T_e_old = p_e_old / n_floor
-# T_e = conditional(T_e_old > 1e-6, T_e_old, 1e-6)  # Avoid division by zero in the loss terms
-T_e = Constant(INITIAL_Te)
-
 # Ion sound speed
-# p_total_old = p_e_old + p_i_old
-# p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
-# c_s = sqrt(p_total_floor / n_floor)
-c_s = Constant(1.0)
+n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
+p_total_old = p_e_old + p_i_old
+p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
+c_s = sqrt(p_total_floor / n_floor)
 
 # Vorticity equation
 a_w = w_trial * v_w * dx
@@ -148,7 +142,7 @@ L_w = (
     w_old * v_w * dx
     - DT * advection_term(w_old, v_w, v_ExB)
     + DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx
-    - DT * alpha * (n_old * c_s / T_e) * phi * v_w * dx
+    - DT * alpha * (n_old * c_s) * phi * v_w * dx
 )
 
 # Density equation
@@ -156,7 +150,7 @@ a_n = n_trial * v_n * dx
 L_n = (
     n_old * v_n * dx
     - DT * advection_term(n_old, v_n, v_ExB)
-    - DT * alpha * (n_old * c_s / T_e) * phi * v_n * dx
+    - DT * alpha * (n_old * c_s) * phi * v_n * dx
 )
 
 # Electron pressure equation

@@ -144,26 +144,11 @@ L_phi = (
     - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
 )
 
-n_pos = conditional(n_old > 0, n_old, 0.0)
-p_e_safe = conditional(p_e_old > 1e-6, p_e_old, 1e-6)
-p_total = p_e_old + p_i_old
-p_total_pos = conditional(p_total > 0, p_total, 0.0)
-# n * c_s / T_e rewritten as n^1.5 * sqrt(p_tot) / p_e
-sigma = (n_pos * sqrt(n_pos) * sqrt(p_total_pos)) / p_e_safe
-# p_e * c_s rewritten as p_e * sqrt(p_tot) / sqrt(n)
-chi = (p_e_old / sqrt(n_pos**2 + Constant(1.0e-3)**2)) * sqrt(n_pos) * sqrt(p_total_pos)
-
-# Electron temperature
-# n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
-# T_e_old = p_e_old / n_floor
-# T_e = conditional(T_e_old > 1e-6, T_e_old, 1e-6)  # Avoid division by zero in the loss terms
-T_e = Constant(INITIAL_Te)
-
 # Ion sound speed
-# p_total_old = p_e_old + p_i_old
-# p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
-# c_s = sqrt(p_total_floor / n_floor)
-c_s = Constant(1.0)
+n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
+p_total_old = p_e_old + p_i_old
+p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
+c_s = sqrt(p_total_floor / n_floor)
 
 # Vorticity equation
 a_w = w_trial * v_w * dx
@@ -171,8 +156,7 @@ L_w = (
     w_old * v_w * dx
     - DT * advection_term(w_old, v_w, v_ExB)
     + DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx
-    - DT * alpha * (n_old * c_s / T_e) * phi * v_w * dx
-    # - DT * alpha * sigma * phi * v_w * dx
+    - DT * alpha * (n_old * c_s) * phi * v_w * dx
 )
 
 # Density equation
@@ -180,8 +164,7 @@ a_n = n_trial * v_n * dx
 L_n = (
     n_old * v_n * dx
     - DT * advection_term(n_old, v_n, v_ExB)
-    - DT * alpha * (n_old * c_s / T_e) * phi * v_n * dx
-    # - DT * alpha * sigma * phi * v_n * dx
+    - DT * alpha * (n_old * c_s) * phi * v_n * dx
 )
 
 # Electron pressure equation
@@ -190,7 +173,6 @@ L_p_e = (
     p_e_old * v_p_e * dx
     - DT * advection_term(p_e_old, v_p_e, v_ExB)
     - DT * alpha * delta_e * (p_e * c_s) * v_p_e * dx
-    # - DT * alpha * delta_e * chi * v_p_e * dx
 )
 
 # Small parameter to control the amount of diffusion
