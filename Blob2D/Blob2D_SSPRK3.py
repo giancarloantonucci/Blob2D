@@ -13,8 +13,8 @@ g = 1.0      # Curvature (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss (alpha = rho_s0 / L_parallel)
 
 # BCs
-BOUNDARY_TYPE = "dirichlet"
-# BOUNDARY_TYPE = "periodic"
+# BOUNDARY_TYPE = "Dirichlet"
+BOUNDARY_TYPE = "Periodic"
 
 # ICs
 BACKGROUND_PLASMA = 0.0
@@ -36,7 +36,7 @@ OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 # ======================
 
 # Mesh
-if BOUNDARY_TYPE == "periodic":
+if BOUNDARY_TYPE == "Periodic":
     mesh = PeriodicSquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
 else:
     mesh = SquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
@@ -46,19 +46,21 @@ V_w = FunctionSpace(mesh, "DQ", 1)
 V_n = FunctionSpace(mesh, "DQ", 1)
 V_phi = FunctionSpace(mesh, "CG", 2)
 
-# Fields at current time step
+# Solution fields
 w = Function(V_w, name="vorticity")
 n = Function(V_n, name="density")
 phi = Function(V_phi, name="potential")
 
-# Fields at previous time step
+# Placeholders for the input state in weak form
 w_old = Function(V_w)
 n_old = Function(V_n)
 
-# Intermediate stages
-w_1 = Function(V_w)
+# Storage for SSPRK3 steps
+w_0 = Function(V_w)  # State at t^n
+n_0 = Function(V_n)
+w_1 = Function(V_w)  # Intermediate stage 1
 n_1 = Function(V_n)
-w_2 = Function(V_w)
+w_2 = Function(V_w)  # Intermediate stage 2
 n_2 = Function(V_n)
 
 # Test functions
@@ -70,6 +72,15 @@ v_phi = TestFunction(V_phi)
 w_trial = TrialFunction(V_w)
 n_trial = TrialFunction(V_n)
 phi_trial = TrialFunction(V_phi)
+
+# ======================
+# BOUNDARY CONDITIONS
+# ======================
+
+if BOUNDARY_TYPE == "Dirichlet":
+    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
+else:
+    bcs = []
 
 # ======================
 # INITIAL CONDITIONS
@@ -84,15 +95,6 @@ r2 = (x - centre)**2 + (y - centre)**2
 n.interpolate(BACKGROUND_PLASMA + BLOB_AMPLITUDE * exp(-r2 / (BLOB_WIDTH**2)))
 
 # ======================
-# BOUNDARY CONDITIONS
-# ======================
-
-if BOUNDARY_TYPE == "dirichlet":
-    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
-else:
-    bcs = []
-
-# ======================
 # WEAK FORMULATION
 # ======================
 
@@ -101,26 +103,21 @@ v_ExB = as_vector([phi.dx(1), -phi.dx(0)])
 normal = FacetNormal(mesh)
 
 def advection_term(q, v_q, v_ExB):
-    "From https://www.firedrakeproject.org/demos/DG_advection.py.html"
-    # Conservation step
-    # Calculate the normal velocity using the averaged field
+    # Average normal velocity (to find flow direction)
     v_ExB_n_avg = dot(avg(v_ExB), normal('+'))
-    # Upwinding step
-    # If v_ExB_n_avg > 0: Flow is (+) -> (-). We carry q(+) info
-    # If v_ExB_n_avg < 0: Flow is (-) -> (+). We carry q(-) info
+    # Upwinding step: select q from the upstream side
+    # If v_ExB_n_avg > 0: Flow is (+) -> (-). We carry q(+)
+    # If v_ExB_n_avg < 0: Flow is (-) -> (+). We carry q(-)
     flux_upwind = conditional(v_ExB_n_avg > 0, v_ExB_n_avg * q('+'), v_ExB_n_avg * q('-'))
-    # Facet term
-    # (Jump in test function) * (Upwinded Flux)
-    flux_term = (v_q('+') - v_q('-')) * flux_upwind * dS
-    # Interior term
-    # Integration by parts (standard DG)
+    facet_term = (v_q('+') - v_q('-')) * flux_upwind * dS
     interior_term = q * div(v_q * v_ExB) * dx
-    return flux_term - interior_term
+    return facet_term - interior_term
 
 # Potential equation
 a_phi = inner(grad(phi_trial), grad(v_phi)) * dx
 L_phi = -w_old * v_phi * dx
 
+# Vorticity equation
 a_w = w_trial * v_w * dx
 L_w = (
     w_old * v_w * dx 
@@ -129,6 +126,7 @@ L_w = (
     - DT * alpha * phi * n_old * v_w * dx
 )
 
+# Density equation
 a_n = n_trial * v_n * dx
 L_n = (
     n_old * v_n * dx
@@ -140,40 +138,42 @@ L_n = (
 # SOLVER
 # ======================
 
-if BOUNDARY_TYPE == "dirichlet":
+# Elliptic solver
+if BOUNDARY_TYPE == "Dirichlet":
     # Dirichlet BCs. Solution is unique
     phi_problem = LinearVariationalProblem(a_phi, L_phi, phi, bcs=bcs)
     phi_solver = LinearVariationalSolver(phi_problem, solver_parameters={
-        'ksp_type': 'cg',  # Fastest for SPD linear systems
-        'pc_type': 'hypre',  # Use HYPRE library
-        'pc_hypre_type': 'boomeramg',  # Algebraic Multigrid, best for elliptic
+        'ksp_type': 'cg',
+        # Algebraic Multigrid, from HYPRE, is best for elliptic
+        'pc_type': 'hypre',
+        'pc_hypre_type': 'boomeramg',
     })
 else:
     # Periodic BCs. Solution is unique only up to a constant
-    # Define the nullspace to make the problem solvable
+    # Use nullspace to make the problem solvable
     nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
     phi_problem = LinearVariationalProblem(a_phi, L_phi, phi, bcs=bcs)
     phi_solver = LinearVariationalSolver(phi_problem, nullspace=nullspace, solver_parameters={
-        'ksp_type': 'cg',  # Fastest for SPD linear systems
-        'pc_type': 'gamg',  # Geometric Multigrid, handles nullspaces well
+        'ksp_type': 'cg',
+        # Geometric Multigrid handles nullspaces well
+        'pc_type': 'gamg',
     })
 
-w_problem = LinearVariationalProblem(a_w, L_w, w)
-w_solver = LinearVariationalSolver(w_problem, solver_parameters={
+# Hyperbolic solvers
+transport_parameters = {
     'ksp_type': 'preonly',  # Apply preconditioner once
     'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
     'sub_pc_type': 'lu',  # Invert the local blocks
-})
+}
+
+w_problem = LinearVariationalProblem(a_w, L_w, w)
+w_solver = LinearVariationalSolver(w_problem, solver_parameters=transport_parameters)
 
 n_problem = LinearVariationalProblem(a_n, L_n, n)
-n_solver = LinearVariationalSolver(n_problem, solver_parameters={
-    'ksp_type': 'preonly',  # Apply preconditioner once
-    'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
-    'sub_pc_type': 'lu',  # Invert the local blocks
-})
+n_solver = LinearVariationalSolver(n_problem, solver_parameters=transport_parameters)
 
 # ======================
-# MAIN LOOP
+# TIME STEPPING
 # ======================
 
 output_file = VTKFile(f"Blob2D_SSPRK3_{BOUNDARY_TYPE}.pvd")
@@ -184,61 +184,56 @@ print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 t = 0.0
 output_file.write(w, n, phi, time=t)
 
-def euler_step(w_in, n_in, w_out, n_out):
-    """
-    Performs one Forward Euler step: out = in + dt * RHS(in)
-    """
-    # 1. Load the state "in" into the variables used by the weak forms (w_old, n_old)
-    w_old.assign(w_in)
-    n_old.assign(n_in)
-    # Enforce solvability condition for potential equation if periodic BCs
-    # The RHS (w) must have zero mean
-    if BOUNDARY_TYPE == "periodic":
-        w_old_avg = assemble(w_old * dx) / (DOMAIN_SIZE**2)
-        w_old.assign(w_old - w_old_avg)
-    # 3. Update Phi (required for v_ExB in the next steps)
+def solve_stage(w_input, n_input, w_output, n_output):
+    "Takes one Forward Euler step"
+    # Load input into weak form
+    w_old.assign(w_input)
+    n_old.assign(n_input)
+    
+    # Enforce solvability for periodic potential (zero mean vorticity)
+    if BOUNDARY_TYPE == "Periodic":
+        w_mean = assemble(w_old * dx) / (DOMAIN_SIZE**2)
+        w_old.assign(w_old - w_mean)
+    
+    # Solve
     phi_solver.solve()
-    # 4. Solve continuity equations
-    # The solvers compute the projection of the RHS, effectively doing the Euler step
     w_solver.solve()
     n_solver.solve()
-    # 5. Copy results to "out"
-    w_out.assign(w)
-    n_out.assign(n)
-
-for step in range(TIME_STEPS):
-    t += DT
     
-    # Save state at t^n
-    w_old.assign(w)
-    n_old.assign(n)
+    # Write to output
+    w_output.assign(w)
+    n_output.assign(n)
+
+def take_step():
+    "Takes one SSPRK3 step"
+    
+    # Save the starting state U^n
+    w_0.assign(w)
+    n_0.assign(n)
     
     # === STAGE 1 ===
-    # w_1 = w_n + dt * L(w_n)
-    euler_step(w_old, n_old, w_1, n_1)
+    # U(1) = U^n + dt * L(U^n)
+    solve_stage(w_0, n_0, w_1, n_1)
     
     # === STAGE 2 ===
-    # w_2 = 3/4 w_n + 1/4 (w_1 + dt * L(w_1))
-    # First, compute the Euler step from w_1. Use 'w' as temporary storage.
-    euler_step(w_1, n_1, w, n)
-    
-    # Combine
-    w_2.assign(0.75 * w_old + 0.25 * w)
-    n_2.assign(0.75 * n_old + 0.25 * n)
+    # U(2) = 3/4 U^n + 1/4 (U(1) + dt * L(U(1)))
+    solve_stage(w_1, n_1, w, n) # Use w, n as temporary storage
+    w_2.assign(0.75 * w_0 + 0.25 * w)
+    n_2.assign(0.75 * n_0 + 0.25 * n)
     
     # === STAGE 3 ===
-    # w_{n+1} = 1/3 w_n + 2/3 (w_2 + dt * L(w_2))
-    # First, compute the Euler step from w_2. Use 'w' as temporary storage.
-    euler_step(w_2, n_2, w, n)
+    # U^{n+1} = 1/3 U^n + 2/3 (U(2) + dt * L(U(2)))
+    solve_stage(w_2, n_2, w, n) # Use w, n as temporary storage
+    w.assign((1.0/3.0) * w_0 + (2.0/3.0) * w)
+    n.assign((1.0/3.0) * n_0 + (2.0/3.0) * n)
+
+for step in range(1, TIME_STEPS + 1):
+    t += DT
     
-    # Combine to get final result
-    w.assign((1.0/3.0) * w_old + (2.0/3.0) * w)
-    n.assign((1.0/3.0) * n_old + (2.0/3.0) * n)
+    take_step()
     
-    print(f"Step {step+1}/{TIME_STEPS}: t = {t:.4f}/{END_TIME}")
-    
-    if (step+1) % OUTPUT_INTERVAL == 0:
-        print(f"Saving output at t = {t:.4f}")
+    if step % OUTPUT_INTERVAL == 0:
+        print(f"Saving output at t = {t:.2f}/{END_TIME}")
         output_file.write(w, n, phi, time=t)
-        
+
 print(f"Done in {time.time() - start_time} seconds")
