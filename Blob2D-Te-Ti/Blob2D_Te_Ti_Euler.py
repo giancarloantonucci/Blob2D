@@ -14,11 +14,11 @@ alpha = 0.1    # Parallel loss (alpha = rho_s0 / L_parallel)
 delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
 
 # BCs
-BOUNDARY_TYPE = "dirichlet"
-# BOUNDARY_TYPE = "periodic"
+BOUNDARY_TYPE = "Dirichlet"
+# BOUNDARY_TYPE = "Periodic"
 
 # ICs
-BACKGROUND_PLASMA = 1.0
+BACKGROUND_PLASMA = 0.0
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 INITIAL_Te = 1.0
@@ -39,7 +39,7 @@ OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 # ======================
 
 # Mesh
-if BOUNDARY_TYPE == "periodic":
+if BOUNDARY_TYPE == "Periodic":
     mesh = PeriodicSquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
 else:
     mesh = SquareMesh(MESH_RESOLUTION, MESH_RESOLUTION, DOMAIN_SIZE, quadrilateral=True)
@@ -51,14 +51,14 @@ V_p_e = FunctionSpace(mesh, "DQ", 1)
 V_p_i = FunctionSpace(mesh, "DQ", 1)
 V_phi = FunctionSpace(mesh, "CG", 2)
 
-# Fields at current time step
+# Solution fields
 w = Function(V_w, name="vorticity")
 n = Function(V_n, name="density")
 p_e = Function(V_p_e, name="electron_pressure")
 p_i = Function(V_p_i, name="ion_pressure")
 phi = Function(V_phi, name="potential")
 
-# Fields at previous time step
+# Placeholders for the input state in weak form
 w_old = Function(V_w)
 n_old = Function(V_n)
 p_e_old = Function(V_p_e)
@@ -79,6 +79,15 @@ p_i_trial = TrialFunction(V_p_i)
 phi_trial = TrialFunction(V_phi)
 
 # ======================
+# BOUNDARY CONDITIONS
+# ======================
+
+if BOUNDARY_TYPE == "Dirichlet":
+    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
+else:
+    bcs = []
+
+# ======================
 # INITIAL CONDITIONS
 # ======================
 
@@ -92,17 +101,7 @@ n0 = BACKGROUND_PLASMA + BLOB_AMPLITUDE * exp(-r2 / (BLOB_WIDTH**2))
 n.interpolate(n0)
 
 p_e.interpolate(n0 * INITIAL_Te)
-
 p_i.interpolate(n0 * INITIAL_Ti)
-
-# ======================
-# BOUNDARY CONDITIONS
-# ======================
-
-if BOUNDARY_TYPE == "dirichlet":
-    bcs = [DirichletBC(V_phi, 0, 'on_boundary')]
-else:
-    bcs = []
 
 # ======================
 # WEAK FORMULATION
@@ -113,21 +112,15 @@ v_ExB = as_vector([phi.dx(1), -phi.dx(0)])
 normal = FacetNormal(mesh)
 
 def advection_term(q, v_q, v_ExB):
-    "From https://www.firedrakeproject.org/demos/DG_advection.py.html"
-    # Conservation step
-    # Calculate the normal velocity using the averaged field
+    # Average normal velocity (to find flow direction)
     v_ExB_n_avg = dot(avg(v_ExB), normal('+'))
-    # Upwinding step
-    # If v_ExB_n_avg > 0: Flow is (+) -> (-). We carry q(+) info
-    # If v_ExB_n_avg < 0: Flow is (-) -> (+). We carry q(-) info
+    # Upwinding step: select q from the upstream side
+    # If v_ExB_n_avg > 0: Flow is (+) -> (-). We carry q(+)
+    # If v_ExB_n_avg < 0: Flow is (-) -> (+). We carry q(-)
     flux_upwind = conditional(v_ExB_n_avg > 0, v_ExB_n_avg * q('+'), v_ExB_n_avg * q('-'))
-    # Facet term
-    # (Jump in test function) * (Upwinded Flux)
-    flux_term = (v_q('+') - v_q('-')) * flux_upwind * dS
-    # Interior term
-    # Integration by parts (standard DG)
+    facet_term = (v_q('+') - v_q('-')) * flux_upwind * dS
     interior_term = q * div(v_q * v_ExB) * dx
-    return flux_term - interior_term
+    return facet_term - interior_term
 
 # Potential equation
 a_phi = inner(grad(phi_trial), grad(v_phi)) * dx
@@ -138,30 +131,35 @@ L_phi = (
 )
 
 # Electron temperature
-n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
-T_e_old = p_e_old / n_floor
-T_e_floor = conditional(T_e_old > 1e-4, T_e_old, 1e-4)  # Avoid division by zero in the loss terms
+# n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
+# T_e_old = p_e_old / n_floor
+# T_e = conditional(T_e_old > 1e-6, T_e_old, 1e-6)  # Avoid division by zero in the loss terms
+T_e = Constant(INITIAL_Te)
 
 # Ion sound speed
-p_total_old = p_e_old + p_i_old
-p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
-c_s = sqrt(p_total_floor / n_floor)
+# p_total_old = p_e_old + p_i_old
+# p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
+# c_s = sqrt(p_total_floor / n_floor)
+c_s = Constant(1.0)
 
+# Vorticity equation
 a_w = w_trial * v_w * dx
 L_w = (
     w_old * v_w * dx
     - DT * advection_term(w_old, v_w, v_ExB)
     + DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx
-    - DT * alpha * (n_old * c_s / T_e_floor) * phi * v_w * dx
+    - DT * alpha * (n_old * c_s / T_e) * phi * v_w * dx
 )
 
+# Density equation
 a_n = n_trial * v_n * dx
 L_n = (
     n_old * v_n * dx
     - DT * advection_term(n_old, v_n, v_ExB)
-    - DT * alpha * (n_old * c_s / T_e_floor) * phi * v_n * dx
+    - DT * alpha * (n_old * c_s / T_e) * phi * v_n * dx
 )
 
+# Electron pressure equation
 a_p_e = p_e_trial * v_p_e * dx
 L_p_e = (
     p_e_old * v_p_e * dx
@@ -176,76 +174,71 @@ h = CellDiameter(mesh)
 # Average cell diameter on a facet
 h_avg = (h('+') + h('-')) / 2.0
 
+def sipg_term(q, v_q):
+    return (
+        inner(grad(q), grad(v_q)) * dx
+        - inner(avg(grad(q)), jump(v_q, normal)) * dS
+        - inner(jump(q, normal), avg(grad(v_q))) * dS
+        + (Constant(10.0) / h_avg) * inner(jump(q), jump(v_q)) * dS
+    )
+
+# Ion pressure equation
 a_p_i = p_i_trial * v_p_i * dx
 L_p_i = (
     p_i_old * v_p_i * dx
     - DT * advection_term(p_i_old, v_p_i, v_ExB)
-    # The advection term creates numerical wiggles that can cause p_i to go
-    # negative. F_p_i is pure advection and has no physical damping to counteract
-    # this. We add artificial viscosity (SIPG) to dampen these wiggles
-    - DT * epsilon * (
-        inner(grad(p_i_old), grad(v_p_i)) * dx
-        - inner(avg(grad(p_i_old)), jump(v_p_i, normal)) * dS
-        - inner(jump(p_i_old, normal), avg(grad(v_p_i))) * dS
-        + (Constant(10.0) / h_avg) * inner(jump(p_i_old), jump(v_p_i)) * dS
-    )
+    - DT * epsilon * sipg_term(p_i_old, v_p_i)
 )
 
 # ======================
 # SOLVER
 # ======================
 
-if BOUNDARY_TYPE == "dirichlet":
+# Elliptic solver
+if BOUNDARY_TYPE == "Dirichlet":
     # Dirichlet BCs. Solution is unique
     phi_problem = LinearVariationalProblem(a_phi, L_phi, phi, bcs=bcs)
     phi_solver = LinearVariationalSolver(phi_problem, solver_parameters={
-        'ksp_type': 'cg',  # Fastest for SPD linear systems
-        'pc_type': 'hypre',  # Use HYPRE library
-        'pc_hypre_type': 'boomeramg',  # Algebraic Multigrid, best for elliptic
+        'ksp_type': 'cg',
+        # Algebraic Multigrid, from HYPRE, is best for elliptic
+        'pc_type': 'hypre',
+        'pc_hypre_type': 'boomeramg',
     })
 else:
     # Periodic BCs. Solution is unique only up to a constant
-    # Define the nullspace to make the problem solvable
+    # Use nullspace to make the problem solvable
     nullspace = VectorSpaceBasis(constant=True, comm=mesh.comm)
     phi_problem = LinearVariationalProblem(a_phi, L_phi, phi, bcs=bcs)
     phi_solver = LinearVariationalSolver(phi_problem, nullspace=nullspace, solver_parameters={
-        'ksp_type': 'cg',  # Fastest for SPD linear systems
-        'pc_type': 'gamg',  # Geometric Multigrid, handles nullspaces well
+        'ksp_type': 'cg',
+        # Geometric Multigrid handles nullspaces well
+        'pc_type': 'gamg',
     })
 
-w_problem = LinearVariationalProblem(a_w, L_w, w)
-w_solver = LinearVariationalSolver(w_problem, solver_parameters={
+# Hyperbolic solvers
+transport_parameters = {
     'ksp_type': 'preonly',  # Apply preconditioner once
     'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
-    'sub_pc_type': 'ilu',  # Invert the local blocks
-})
+    'sub_pc_type': 'lu',  # Invert the local blocks
+}
+
+w_problem = LinearVariationalProblem(a_w, L_w, w)
+w_solver = LinearVariationalSolver(w_problem, solver_parameters=transport_parameters)
 
 n_problem = LinearVariationalProblem(a_n, L_n, n)
-n_solver = LinearVariationalSolver(n_problem, solver_parameters={
-    'ksp_type': 'preonly',  # Apply preconditioner once
-    'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
-    'sub_pc_type': 'ilu',  # Invert the local blocks
-})
+n_solver = LinearVariationalSolver(n_problem, solver_parameters=transport_parameters)
 
 p_e_problem = LinearVariationalProblem(a_p_e, L_p_e, p_e)
-p_e_solver = LinearVariationalSolver(p_e_problem, solver_parameters={
-    'ksp_type': 'preonly',  # Apply preconditioner once
-    'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
-    'sub_pc_type': 'ilu',  # Invert the local blocks
-})
+p_e_solver = LinearVariationalSolver(p_e_problem, solver_parameters=transport_parameters)
 
 p_i_problem = LinearVariationalProblem(a_p_i, L_p_i, p_i)
-p_i_solver = LinearVariationalSolver(p_i_problem, solver_parameters={
-    'ksp_type': 'preonly',  # Apply preconditioner once
-    'pc_type': 'bjacobi',  # Block Jacobi (unlike DG0, the basis functions for DG1 elements on a quadrilateral are not orthogonal)
-    'sub_pc_type': 'ilu',  # Invert the local blocks
-})
+p_i_solver = LinearVariationalSolver(p_i_problem, solver_parameters=transport_parameters)
 
 # ======================
-# MAIN LOOP
+# TIME STEPPING
 # ======================
 
-output_file = VTKFile(f"Blob2D_Te_Ti_explicit_{BOUNDARY_TYPE}.pvd")
+output_file = VTKFile(f"Blob2D_Te_Ti_Euler_{BOUNDARY_TYPE}.pvd")
 start_time = time.time()
 print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 
@@ -253,36 +246,34 @@ print(f"Running with dt = {DT}, {BOUNDARY_TYPE} BCs")
 t = 0.0
 output_file.write(w, n, p_e, p_i, phi, time=t)
 
-for step in range(TIME_STEPS):
-    t += DT
+def take_step():
+    "Takes one Forward Euler step"
     
-    # Update fields with the results from the last step
+    # Load current state into weak form
     w_old.assign(w)
     n_old.assign(n)
     p_e_old.assign(p_e)
     p_i_old.assign(p_i)
     
-    # Enforce solvability condition for potential equation
-    # The RHS (w) must have zero mean
-    # Both pressure terms vanish automatically when tested against the nullspace
-    if BOUNDARY_TYPE == "periodic":
-        w_old_integral = assemble(w_old * dx)
-        area = DOMAIN_SIZE * DOMAIN_SIZE
-        w_old_avg = w_old_integral / area
-        w_old.assign(w_old - w_old_avg)
+    # Enforce solvability for periodic potential (zero mean vorticity)
+    if BOUNDARY_TYPE == "Periodic":
+        w_mean = assemble(w_old * dx) / (DOMAIN_SIZE**2)
+        w_old.assign(w_old - w_mean)
     
-    # Solve
-    # solve() here re-assembles the RHS vectors L
+    # Solve for new state
     phi_solver.solve()
     w_solver.solve()
     n_solver.solve()
     p_e_solver.solve()
     p_i_solver.solve()
+
+for step in range(1, TIME_STEPS + 1):
+    t += DT
     
-    print(f"Step {step+1}/{TIME_STEPS}: t = {t:.4f}/{END_TIME}")
+    take_step()
     
-    if (step+1) % OUTPUT_INTERVAL == 0:
-        print(f"Saving output at t = {t:.4f}")
+    if step % OUTPUT_INTERVAL == 0:
+        print(f"Saving output at t = {t:.2f}/{END_TIME}")
         output_file.write(w, n, p_e, p_i, phi, time=t)
-        
+
 print(f"Done in {time.time() - start_time} seconds")
