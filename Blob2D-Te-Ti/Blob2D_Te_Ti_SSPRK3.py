@@ -144,10 +144,21 @@ L_phi = (
     - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
 )
 
-# Ion sound speed
+# Floors
 n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
 p_total_old = p_e_old + p_i_old
 p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
+
+# Electron temperature (reference)
+if BACKGROUND_PLASMA == 0.0:
+    # Avoid 0/0 instabilities if starting from a vacuum state
+    T_e = Constant(1.0)
+else:
+    # Dynamic calculation derived from the equation of state
+    T_e_old = p_e_old / n_floor
+    T_e = conditional(T_e_old > 1e-4, T_e_old, 1e-4)
+
+# Ion sound speed
 c_s = sqrt(p_total_floor / n_floor)
 
 # Vorticity equation

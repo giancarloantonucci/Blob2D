@@ -130,10 +130,21 @@ L_phi = (
     - inner(jump(p_i_old, normal), avg(grad(v_phi))) * dS
 )
 
-# Ion sound speed
+# Floors
 n_floor = conditional(n_old > 1e-6, n_old, 1e-6)  # Avoid division by zero
 p_total_old = p_e_old + p_i_old
 p_total_floor = conditional(p_total_old > 0, p_total_old, 0)  # Avoid sqrt(negative)
+
+# Electron temperature (reference)
+if BACKGROUND_PLASMA == 0.0:
+    # Avoid 0/0 instabilities if starting from a vacuum state
+    T_e = Constant(1.0)
+else:
+    # Dynamic calculation derived from the equation of state
+    T_e_old = p_e_old / n_floor
+    T_e = conditional(T_e_old > 1e-4, T_e_old, 1e-4)
+
+# Ion sound speed
 c_s = sqrt(p_total_floor / n_floor)
 
 # Vorticity equation
@@ -142,7 +153,7 @@ L_w = (
     w_old * v_w * dx
     - DT * advection_term(w_old, v_w, v_ExB)
     + DT * g * (p_e_old + p_i_old).dx(1) * v_w * dx
-    - DT * alpha * (n_old * c_s) * phi * v_w * dx
+    - DT * alpha * (n_old * c_s / T_e) * phi * v_w * dx
 )
 
 # Density equation
@@ -150,7 +161,7 @@ a_n = n_trial * v_n * dx
 L_n = (
     n_old * v_n * dx
     - DT * advection_term(n_old, v_n, v_ExB)
-    - DT * alpha * (n_old * c_s) * phi * v_n * dx
+    - DT * alpha * (n_old * c_s / T_e) * phi * v_n * dx
 )
 
 # Electron pressure equation
