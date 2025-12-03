@@ -4,6 +4,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import time
 import numpy as np
 from firedrake import *
+from firedrake.petsc import PETSc
 
 # ======================
 # PARAMETERS
@@ -321,7 +322,8 @@ p_i_solver = LinearVariationalSolver(p_i_problem, solver_parameters=transport_pa
 
 output_file = VTKFile(f"DriftPlane_Te_Ti_SSPRK3.pvd")
 start_time = time.time()
-print(f"Running with dt = {float(DT)}")
+
+PETSc.Sys.Print(f"Running with dt = {float(DT)}")
 
 # Save ICs
 t = 0.0
@@ -390,29 +392,8 @@ for step in range(1, TIME_STEPS + 1):
     
     take_step()
     
-    # CFL diagnostics
-    # if step % 100 == 0:
-    #     # Compute max velocity
-    #     # Fix: Create the function explicitly, then interpolate into it
-    #     V_cfl = FunctionSpace(mesh, "DG", 0)
-    #     v_cfl_func = Function(V_cfl)
-        
-    #     v_mag = sqrt(dot(v_ExB, v_ExB))
-    #     v_cfl_func.interpolate(v_mag) # Forces computation
-        
-    #     max_v = v_cfl_func.dat.data.max()
-        
-    #     # Minimum cell size estimate
-    #     min_h = DOMAIN_SIZE / MESH_RESOLUTION
-    #     # CFL Number
-    #     cfl_now = max_v * DT / min_h
-    #     print(f"Step {step}: t = {t:.2f}, Source = {float(source_scaling):.2f}, CFL = {cfl_now:.3f}")
-        
-    #     if cfl_now > 0.5:
-    #         print("WARNING: CFL > 0.5. Consider reducing DT.")
-    
     if step % OUTPUT_INTERVAL == 0:
-        print(f"Saving output at t = {t:.2f}/{END_TIME}")
+        PETSc.Sys.Print(f"Saving output at t = {t:.2f}/{END_TIME}")
         output_file.write(w, n, p_e, p_i, phi, time=t)
 
-print(f"Done in {time.time() - start_time} seconds")
+PETSc.Sys.Print(f"Done in {time.time() - start_time} seconds")
