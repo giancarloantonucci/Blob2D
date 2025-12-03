@@ -5,10 +5,10 @@ import time
 from firedrake import *
 
 # ======================
-# CONFIGURATION
+# PARAMETERS
 # ======================
 
-# Physics parameters
+# Physics
 g = 1.0      # Curvature (g = 2 * rho_s0 / R_c)
 alpha = 0.1  # Parallel loss (alpha = rho_s0 / L_parallel)
 
@@ -21,14 +21,12 @@ BACKGROUND_PLASMA = 0.0
 BLOB_AMPLITUDE = 0.5
 BLOB_WIDTH = 0.1
 
-# Simulation parameters
+# Simulation
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 64
 END_TIME = 10.0
 TIME_STEPS = 10000
 DT = END_TIME / TIME_STEPS
-
-# Printing
 OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 
 # ======================

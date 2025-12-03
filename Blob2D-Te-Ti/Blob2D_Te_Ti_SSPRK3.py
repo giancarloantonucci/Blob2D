@@ -5,10 +5,10 @@ import time
 from firedrake import *
 
 # ======================
-# CONFIGURATION
+# PARAMETERS
 # ======================
 
-# Physics parameters
+# Physics
 g = 1.0        # Curvature (g = 2 * rho_s0 / R_c)
 alpha = 0.1    # Parallel loss (alpha = rho_s0 / L_parallel)
 delta_e = 6.5  # Sheath heat-transmission coefficient for electrons
@@ -24,14 +24,12 @@ BLOB_WIDTH = 0.1
 INITIAL_Te = 1.0
 INITIAL_Ti = 0.01
 
-# Simulation parameters
+# Simulation
 DOMAIN_SIZE = 1.0
 MESH_RESOLUTION = 64
 END_TIME = 10.0
 TIME_STEPS = 2000
 DT = END_TIME / TIME_STEPS
-
-# Printing
 OUTPUT_INTERVAL = int(0.1 * TIME_STEPS / END_TIME)
 
 # ======================
@@ -192,13 +190,15 @@ epsilon = Constant(1.0e-4)
 h = CellDiameter(mesh)
 # Average cell diameter on a facet
 h_avg = (h('+') + h('-')) / 2.0
+# Penalty parameter (approx 10 * order^2)
+sigma = Constant(10.0)
 
 def sipg_term(q, v_q):
     return (
         inner(grad(q), grad(v_q)) * dx
         - inner(avg(grad(q)), jump(v_q, normal)) * dS
         - inner(jump(q, normal), avg(grad(v_q))) * dS
-        + (Constant(10.0) / h_avg) * inner(jump(q), jump(v_q)) * dS
+        + (sigma / h_avg) * inner(jump(q), jump(v_q)) * dS
     )
 
 # Ion pressure equation
